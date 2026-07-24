@@ -189,18 +189,20 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
     db = SessionLocal()
     start_time = time.time()
     try:
+        import traceback as _tb
         with _fetch_jobs_lock:
             _fetch_jobs[job_id] = {"status": "processing", "progress": 0, "message": "Starting scrape..."}
 
         all_candidates = []
         platform_counts: dict[str, int] = {}
         keyword = payload.job_title or payload.job_description[:50]
-        filters = payload.filters
+        f = payload.filters
+        loc = f.location if f else None
 
         with _fetch_jobs_lock:
             _fetch_jobs[job_id] = {"status": "processing", "progress": 5, "message": "Scraping Rozee.pk..."}
         try:
-            rozee_items = run_rozee_scraper(keyword, filters.location, payload.max_results_per_source)
+            rozee_items = run_rozee_scraper(keyword, loc, payload.max_results_per_source)
             print(f"[bg-fetch] Rozee returned {len(rozee_items)} items")
             if rozee_items:
                 for item in rozee_items:
@@ -208,12 +210,12 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
                     all_candidates.append(cand)
                 platform_counts["Rozee.pk"] = len(rozee_items)
         except Exception as e:
-            print(f"[bg-fetch] Rozee error: {e}")
+            print(f"[bg-fetch] Rozee error: {e}\n{_tb.format_exc()}")
 
         with _fetch_jobs_lock:
             _fetch_jobs[job_id] = {"status": "processing", "progress": 15, "message": "Searching LinkedIn..."}
         try:
-            serp_items = run_linkedin_serp_search(keyword, filters.location, payload.max_results_per_source)
+            serp_items = run_linkedin_serp_search(keyword, loc, payload.max_results_per_source)
             print(f"[bg-fetch] SerpAPI returned {len(serp_items)} items")
             if serp_items:
                 for item in serp_items:
@@ -221,7 +223,7 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
                     all_candidates.append(cand)
                 platform_counts["LinkedIn (Google)"] = len(serp_items)
         except Exception as e:
-            print(f"[bg-fetch] SerpAPI error: {e}")
+            print(f"[bg-fetch] SerpAPI error: {e}\n{_tb.format_exc()}")
 
         # Parallel name fix + scoring via Mistral
         total = len(all_candidates)
@@ -280,14 +282,14 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
         filtered = []
         for cand in scored:
             if cand is None: continue
-            if filters.gender and cand.get("gender") and cand["gender"].lower() != filters.gender.lower(): continue
-            if filters.shift and cand.get("shift_preference") and cand["shift_preference"].lower() != filters.shift.lower(): continue
-            if filters.remote is not None and cand.get("is_remote") is not None and cand["is_remote"] != filters.remote: continue
-            if filters.age_min and cand.get("age") and cand["age"] < filters.age_min: continue
-            if filters.age_max and cand.get("age") and cand["age"] > filters.age_max: continue
-            if filters.experience_min is not None and cand.get("experience_years") is not None and cand["experience_years"] < filters.experience_min: continue
-            if filters.experience_max is not None and cand.get("experience_years") is not None and cand["experience_years"] > filters.experience_max: continue
-            if filters.location and cand.get("location") and filters.location.lower() not in cand["location"].lower(): continue
+            if f.gender and cand.get("gender") and cand["gender"].lower() != f.gender.lower(): continue
+            if f.shift and cand.get("shift_preference") and cand["shift_preference"].lower() != f.shift.lower(): continue
+            if f.remote is not None and cand.get("is_remote") is not None and cand["is_remote"] != f.remote: continue
+            if f.age_min and cand.get("age") and cand["age"] < f.age_min: continue
+            if f.age_max and cand.get("age") and cand["age"] > f.age_max: continue
+            if f.experience_min is not None and cand.get("experience_years") is not None and cand["experience_years"] < f.experience_min: continue
+            if f.experience_max is not None and cand.get("experience_years") is not None and cand["experience_years"] > f.experience_max: continue
+            if f.location and cand.get("location") and f.location.lower() not in cand["location"].lower(): continue
             filtered.append(cand)
 
         with _fetch_jobs_lock:
@@ -358,7 +360,8 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
             }
 
     except Exception as e:
-        print(f"[bg-fetch] Fatal error: {e}")
+        import traceback as _tb2
+        print(f"[bg-fetch] Fatal error: {e}\n{_tb2.format_exc()}")
         with _fetch_jobs_lock:
             _fetch_jobs[job_id] = {"status": "error", "progress": 0, "message": str(e), "candidates": [], "total_fetched": 0, "platform_breakdown": {}, "fetch_time_ms": 0}
     finally:

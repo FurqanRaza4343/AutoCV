@@ -1,6 +1,6 @@
 const API_BASE =
   import.meta.env.VITE_API_URL ||
-  (import.meta.env.DEV ? "" : "https://agentix-hr-api-d135a76b-1bf2-4e6b-bcbe-91ad25e274a5.fly.dev");
+  (import.meta.env.DEV ? "" : "https://agentix-hr-api-bdf4c6a4-c75e-4067-87b5-e0d3b29e3c91.fly.dev");
 
 let _accessToken: string | null = null;
 
