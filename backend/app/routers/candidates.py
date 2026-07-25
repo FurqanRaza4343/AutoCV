@@ -362,8 +362,12 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
     except Exception as e:
         import traceback as _tb2
         print(f"[bg-fetch] Fatal error: {e}\n{_tb2.format_exc()}")
+        cur_progress = 0
         with _fetch_jobs_lock:
-            _fetch_jobs[job_id] = {"status": "error", "progress": 0, "message": str(e), "candidates": [], "total_fetched": 0, "platform_breakdown": {}, "fetch_time_ms": 0}
+            existing = _fetch_jobs.get(job_id, {})
+            if isinstance(existing, dict):
+                cur_progress = existing.get("progress", 0)
+            _fetch_jobs[job_id] = {"status": "error", "progress": cur_progress, "message": str(e), "candidates": [], "total_fetched": 0, "platform_breakdown": {}, "fetch_time_ms": 0}
     finally:
         db.close()
 
