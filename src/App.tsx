@@ -192,6 +192,7 @@ Required Skills:
   const [fetchedCandidates, setFetchedCandidates] = useState<CandidateDTO[]>([]);
   const [fetchPlatformBreakdown, setFetchPlatformBreakdown] = useState<Record<string, number>>({});
   const [fetchTimeMs, setFetchTimeMs] = useState(0);
+  const [fetchMessage, setFetchMessage] = useState("");
   const [boardFilters, setBoardFilters] = useState<FiltersState>({
     gender: "", shift: "", remote: "", ageMin: "", ageMax: "",
     location: "", experienceMin: "", experienceMax: "",
@@ -255,6 +256,7 @@ Required Skills:
     }
     setIsFetchingFromBoards(true);
     setFetchedCandidates([]);
+    setFetchMessage("Starting...");
     showToast("Searching job boards for real candidates...");
     try {
       const f = boardFilters;
@@ -276,6 +278,7 @@ Required Skills:
       // Poll for completion
       const poll = async (): Promise<void> => {
         const status = await api.fetchCandidates.getStatus(result.fetch_id);
+        setFetchMessage(status.message || `Fetching... ${status.progress ?? 0}%`);
         if (status.status === "completed") {
           setFetchedCandidates(status.candidates || []);
           setFetchPlatformBreakdown(status.platform_breakdown);
@@ -286,11 +289,14 @@ Required Skills:
           } else {
             showToast("No candidates matched your filters. Try broader criteria.");
           }
+          setFetchMessage("");
           setIsFetchingFromBoards(false);
           return;
         }
         if (status.status === "error") {
           showToast(`Fetch failed: ${status.message}`);
+          setFetchMessage(status.message || "Failed");
+          setFetchMessage("");
           setIsFetchingFromBoards(false);
           return;
         }
@@ -916,6 +922,7 @@ Required Skills:
                       onFetch={handleFetchFromBoards}
                       isFetching={isFetchingFromBoards}
                       platformBreakdown={fetchPlatformBreakdown}
+                      fetchMessage={fetchMessage}
                     />
 
                     {/* Staged Resumes Interactive Panel */}

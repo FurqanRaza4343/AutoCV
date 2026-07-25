@@ -18,9 +18,10 @@ interface FetchFiltersProps {
   onFetch: () => void;
   isFetching: boolean;
   platformBreakdown?: Record<string, number>;
+  fetchMessage?: string;
 }
 
-export default function FetchFilters({ filters, onChange, onFetch, isFetching, platformBreakdown }: FetchFiltersProps) {
+export default function FetchFilters({ filters, onChange, onFetch, isFetching, platformBreakdown, fetchMessage }: FetchFiltersProps) {
   const update = (key: keyof FiltersState, value: string) => {
     onChange({ ...filters, [key]: value });
   };
@@ -175,7 +176,7 @@ export default function FetchFilters({ filters, onChange, onFetch, isFetching, p
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
-              Fetching Real Candidates...
+              {fetchMessage || "Fetching Real Candidates..."}
             </>
           ) : (
             <>
