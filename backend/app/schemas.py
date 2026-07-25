@@ -271,6 +271,7 @@ class PipelineFullOut(BaseModel):
 
 
 class CVAnalysisOut(BaseModel):
+    id: Optional[str] = None
     name: str
     email: str
     role: str

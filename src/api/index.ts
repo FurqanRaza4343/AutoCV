@@ -356,6 +356,7 @@ export interface PipelineResultDTO {
 }
 
 export interface CVAnalysisDTO {
+  id?: string;
   name: string;
   email: string;
   role: string;

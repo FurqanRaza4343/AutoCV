@@ -71,7 +71,7 @@ export default function CVAnalyzer({ onPipelineRun, showToast }: CVAnalyzerProps
 
   const handleSendToPipeline = async () => {
     if (results.length === 0) return;
-    const ids = results.map((r) => r.email);
+    const ids = results.map((r) => r.id || r.email);
     if (onPipelineRun) {
       onPipelineRun(ids);
     }

@@ -339,7 +339,7 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
                 auto_run = models.PipelineRun(
                     id=auto_run_id, job_title=payload.job_title or "Auto Pipeline",
                     job_description=payload.job_description, status="running",
-                    created_at=datetime.now(),
+                    created_at=datetime.now().astimezone(),
                 )
                 db.add(auto_run)
                 db.commit()
@@ -442,7 +442,31 @@ Respond with ONLY valid JSON in this exact structure:
         except Exception:
             data = {}
 
+        # Save to DB so candidate has an ID for pipeline
+        candidate = models.Candidate(
+            name=data.get("name", file.filename or "Unknown")[:100],
+            email=data.get("email", "")[:200],
+            role=data.get("role", "Professional")[:100],
+            match_score=int(data.get("score", 50)),
+            summary=data.get("summary", "")[:1000],
+            cv_text=cv_text[:50000],
+            skills=data.get("skills", ""),
+            experience_years=data.get("experience_years"),
+            gender=data.get("gender"),
+            shift_preference=data.get("shift_preference"),
+            is_remote=data.get("is_remote"),
+            age=data.get("age"),
+            location=data.get("location"),
+            department="Engineering",
+            applied_date=date.today().isoformat(),
+            status="Screening",
+            current_stage="Awaiting Ranking",
+        )
+        db.add(candidate)
+        db.flush()
+
         results.append(schemas.CVAnalysisOut(
+            id=candidate.id,
             name=data.get("name", file.filename or "Unknown"),
             email=data.get("email", ""),
             role=data.get("role", "Professional"),
@@ -461,6 +485,7 @@ Respond with ONLY valid JSON in this exact structure:
             overall_verdict=data.get("overall_verdict", "Consider"),
         ))
 
+    db.commit()
     return schemas.BatchAnalyzeResponse(candidates=results, total_processed=len(results))
 
 
