@@ -32,7 +32,8 @@ _fetch_jobs_lock = threading.Lock()
 
 
 def clean_name(raw: str) -> str:
-    import re
+    if not raw:
+        return "Unknown"
     name = raw.strip()
     cleaned = re.sub(r'[^A-Za-z \-.\']', '', name).strip()
     if len(cleaned) < 2:
