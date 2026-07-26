@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useAppStore, CandidateStatus, QueueStage } from "./store/useAppStore";
 import { useAuthStore } from "./store/useAuthStore";
 import { api } from "./api";
@@ -150,6 +150,10 @@ export default function App() {
     }
   }, [currentTab]);
 
+  useEffect(() => {
+    return () => { fetchAbortRef.current?.abort(); };
+  }, []);
+
   // 2. Candidates & Agents live in useAppStore
 
   // Mobile sidebar toggle
@@ -193,6 +197,7 @@ Required Skills:
   const [fetchPlatformBreakdown, setFetchPlatformBreakdown] = useState<Record<string, number>>({});
   const [fetchTimeMs, setFetchTimeMs] = useState(0);
   const [fetchMessage, setFetchMessage] = useState("");
+  const fetchAbortRef = useRef<AbortController | null>(null);
   const [boardFilters, setBoardFilters] = useState<FiltersState>({
     gender: "", shift: "", remote: "", ageMin: "", ageMax: "",
     location: "", experienceMin: "", experienceMax: "",
@@ -276,7 +281,10 @@ Required Skills:
         },
       });
       // Poll for completion
+      const controller = new AbortController();
+      fetchAbortRef.current = controller;
       const poll = async (): Promise<void> => {
+        if (controller.signal.aborted) return;
         const status = await api.fetchCandidates.getStatus(result.fetch_id);
         setFetchMessage(status.message || `Fetching... ${status.progress ?? 0}%`);
         if (status.status === "completed") {
@@ -296,7 +304,6 @@ Required Skills:
         if (status.status === "error") {
           showToast(`Fetch failed: ${status.message}`);
           setFetchMessage(status.message || "Failed");
-          setFetchMessage("");
           setIsFetchingFromBoards(false);
           return;
         }
