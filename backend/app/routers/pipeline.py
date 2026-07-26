@@ -53,8 +53,9 @@ def _background_run_pipeline(run_id: str, candidate_ids: list[str], job_title: s
         db.commit()
 
         best = None
+        first_id = working_data[0]["candidate_id"] if working_data else None
         for wd in working_data:
-            if wd.get("candidate_id") and wd.get("candidate_id") == (working_data[0]["candidate_id"] if working_data else None):
+            if wd.get("candidate_id") and wd["candidate_id"] == first_id:
                 best = wd
 
         for idx, wd in enumerate(working_data):
