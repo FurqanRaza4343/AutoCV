@@ -46,10 +46,15 @@ def clean_name(raw: str) -> str:
 MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
 
 
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
 def extract_text(file: UploadFile) -> str:
     """extract actual text from PDF/DOCX """
     filename = file.filename.lower()
     content = file.file.read()
+    if len(content) > MAX_FILE_SIZE:
+        return ""
     file.file.seek(0)
 
     if filename.endswith(".pdf"):
