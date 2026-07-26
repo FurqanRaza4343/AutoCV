@@ -187,7 +187,7 @@ def _run_parser_bot(db: Session):
                 parsed = agent_parse({"cv_text": c.cv_text, "name": c.name}, f"Parse candidate for {c.role or 'Professional'} role")
                 if parsed.get("skills"):
                     c.skills = ", ".join(parsed["skills"]) if isinstance(parsed["skills"], list) else str(parsed["skills"])
-                if parsed.get("experience_years"):
+                if parsed.get("experience_years") is not None:
                     c.experience_years = parsed["experience_years"]
                 if parsed.get("location"):
                     c.location = parsed["location"]
@@ -195,7 +195,7 @@ def _run_parser_bot(db: Session):
                     c.gender = parsed["gender"]
                 if parsed.get("shift_preference"):
                     c.shift_preference = parsed["shift_preference"]
-                if parsed.get("age"):
+                if parsed.get("age") is not None:
                     c.age = parsed["age"]
                 if parsed.get("is_remote") is not None:
                     c.is_remote = parsed["is_remote"]
@@ -247,9 +247,9 @@ def _run_ranker_bot(db: Session):
                     c.gender = result["gender"]
                 if result.get("shift_preference"):
                     c.shift_preference = result["shift_preference"]
-                if result.get("age"):
+                if result.get("age") is not None:
                     c.age = result["age"]
-                if result.get("experience_years"):
+                if result.get("experience_years") is not None:
                     c.experience_years = result["experience_years"]
                 c.current_stage = "Done"
                 c.status = "Screening"

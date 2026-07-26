@@ -258,10 +258,10 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
                     cand["email"] = result.get("email", cand.get("email", ""))
                     if result.get("gender"):       cand["gender"] = cand["gender"] or result["gender"]
                     if result.get("shift_preference"): cand["shift_preference"] = result.get("shift_preference", cand.get("shift_preference"))
-                    if result.get("age"):           cand["age"] = cand["age"] or result["age"]
+                    if result.get("age") is not None:           cand["age"] = cand["age"] or result["age"]
                     if result.get("is_remote") is not None: cand["is_remote"] = result["is_remote"]
                     if result.get("skills"):        cand["skills"] = result["skills"]
-                    if result.get("experience_years"): cand["experience_years"] = cand["experience_years"] or result["experience_years"]
+                    if result.get("experience_years") is not None: cand["experience_years"] = cand["experience_years"] or result["experience_years"]
                 except Exception:
                     cand["match_score"] = 50
             else:
@@ -646,13 +646,13 @@ def enrich_candidates(db: Session = Depends(get_db)):
                 c.gender = result["gender"]
             if result.get("shift_preference"):
                 c.shift_preference = result["shift_preference"]
-            if result.get("age"):
+            if result.get("age") is not None:
                 c.age = result["age"]
             if result.get("is_remote") is not None:
                 c.is_remote = result["is_remote"]
             if result.get("skills"):
                 c.skills = result["skills"]
-            if result.get("experience_years"):
+            if result.get("experience_years") is not None:
                 c.experience_years = result["experience_years"]
             enriched += 1
         except Exception:
@@ -678,13 +678,13 @@ def screen_candidate(candidate_id: str, payload: schemas.JobDescriptionCreate, d
         candidate.gender = result["gender"]
     if result.get("shift_preference"):
         candidate.shift_preference = result["shift_preference"]
-    if result.get("age"):
+    if result.get("age") is not None:
         candidate.age = result["age"]
     if result.get("is_remote") is not None:
         candidate.is_remote = result["is_remote"]
     if result.get("skills"):
         candidate.skills = result["skills"]
-    if result.get("experience_years"):
+    if result.get("experience_years") is not None:
         candidate.experience_years = result["experience_years"]
     db.commit()
     db.refresh(candidate)
