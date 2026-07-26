@@ -29,6 +29,23 @@ MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 # ── In-memory fetch job tracking for background fetch ────────────────────
 _fetch_jobs: dict[str, dict] = {}
 _fetch_jobs_lock = threading.Lock()
+_FETCH_TTL = 300
+
+
+def _cleanup_stale_fetch_jobs():
+    now = time.time()
+    with _fetch_jobs_lock:
+        stale = [jid for jid, j in list(_fetch_jobs.items()) if now - j.get("_ts", now) > _FETCH_TTL]
+        for sid in stale:
+            _fetch_jobs.pop(sid, None)
+
+
+def _update_fetch_job(job_id: str, **updates):
+    with _fetch_jobs_lock:
+        existing = _fetch_jobs.get(job_id, {})
+        existing.update(updates)
+        existing.setdefault("_ts", time.time())
+        _fetch_jobs[job_id] = existing
 
 
 def clean_name(raw: str) -> str:
@@ -196,8 +213,7 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
     start_time = time.time()
     try:
         import traceback as _tb
-        with _fetch_jobs_lock:
-            _fetch_jobs[job_id] = {"status": "processing", "progress": 0, "message": "Starting scrape..."}
+        _update_fetch_job(job_id, status="processing", progress=0, message="Starting scrape...")
 
         all_candidates = []
         platform_counts: dict[str, int] = {}
@@ -205,8 +221,7 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
         f = payload.filters
         loc = f.location if f else None
 
-        with _fetch_jobs_lock:
-            _fetch_jobs[job_id] = {"status": "processing", "progress": 5, "message": "Scraping Rozee.pk..."}
+        _update_fetch_job(job_id, status="processing", progress=5, message="Scraping Rozee.pk...")
         try:
             rozee_items = run_rozee_scraper(keyword, loc, payload.max_results_per_source)
             print(f"[bg-fetch] Rozee returned {len(rozee_items)} items")
@@ -218,8 +233,7 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
         except Exception as e:
             print(f"[bg-fetch] Rozee error: {e}\n{_tb.format_exc()}")
 
-        with _fetch_jobs_lock:
-            _fetch_jobs[job_id] = {"status": "processing", "progress": 15, "message": "Searching LinkedIn..."}
+        _update_fetch_job(job_id, status="processing", progress=15, message="Searching LinkedIn...")
         try:
             serp_items = run_linkedin_serp_search(keyword, loc, payload.max_results_per_source)
             print(f"[bg-fetch] SerpAPI returned {len(serp_items)} items")
@@ -234,12 +248,10 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
         # Parallel name fix + scoring via Mistral
         total = len(all_candidates)
         if total == 0:
-            with _fetch_jobs_lock:
-                _fetch_jobs[job_id] = {"status": "completed", "progress": 100, "message": "No candidates found", "candidates": [], "total_fetched": 0, "platform_breakdown": platform_counts, "fetch_time_ms": int((time.time() - start_time) * 1000)}
+            _update_fetch_job(job_id, status="completed", progress=100, message="No candidates found", candidates=[], total_fetched=0, platform_breakdown=platform_counts, fetch_time_ms=int((time.time() - start_time) * 1000))
             return
 
-        with _fetch_jobs_lock:
-            _fetch_jobs[job_id] = {"status": "processing", "progress": 20, "message": f"Scoring {total} candidates with AI..."}
+        _update_fetch_job(job_id, status="processing", progress=20, message=f"Scoring {total} candidates with AI...")
 
         scored = [None] * total
         done_count = 0
@@ -281,8 +293,7 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
                 scored[idx] = cand
                 done_count += 1
                 pct = 20 + int(done_count / total * 50)
-                with _fetch_jobs_lock:
-                    _fetch_jobs[job_id] = {"status": "processing", "progress": min(pct, 70), "message": f"Scored {done_count}/{total} candidates..."}
+                _update_fetch_job(job_id, status="processing", progress=min(pct, 70), message=f"Scored {done_count}/{total} candidates...")
 
         # Apply filters
         filtered = []
@@ -298,8 +309,7 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
             if f.location and cand.get("location") and f.location.lower() not in cand["location"].lower(): continue
             filtered.append(cand)
 
-        with _fetch_jobs_lock:
-            _fetch_jobs[job_id] = {"status": "processing", "progress": 75, "message": f"Saving {len(filtered)} candidates to database..."}
+        _update_fetch_job(job_id, status="processing", progress=75, message=f"Saving {len(filtered)} candidates to database...")
 
         # Save to DB
         saved = []
@@ -333,8 +343,7 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
             if saved_candidate:
                 saved.append(saved_candidate)
 
-        with _fetch_jobs_lock:
-            _fetch_jobs[job_id] = {"status": "processing", "progress": 90, "message": "Starting automatic pipeline..."}
+        _update_fetch_job(job_id, status="processing", progress=90, message="Starting automatic pipeline...")
 
         # Run auto pipeline in background (don't wait)
         try:
@@ -355,15 +364,14 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
             print(f"[bg-fetch] Auto pipeline error: {e}")
 
         elapsed = int((time.time() - start_time) * 1000)
-        with _fetch_jobs_lock:
-            _fetch_jobs[job_id] = {
-                "status": "completed", "progress": 100,
-                "message": f"Fetched {len(saved)} candidates in {elapsed}ms",
-                "candidates": [schemas.FetchedCandidateOut.model_validate(c) for c in saved],
-                "total_fetched": len(saved),
-                "platform_breakdown": platform_counts,
-                "fetch_time_ms": elapsed,
-            }
+        _update_fetch_job(job_id,
+            status="completed", progress=100,
+            message=f"Fetched {len(saved)} candidates in {elapsed}ms",
+            candidates=[schemas.FetchedCandidateOut.model_validate(c) for c in saved],
+            total_fetched=len(saved),
+            platform_breakdown=platform_counts,
+            fetch_time_ms=elapsed,
+        )
 
     except Exception as e:
         import traceback as _tb2
@@ -373,7 +381,7 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
             existing = _fetch_jobs.get(job_id, {})
             if isinstance(existing, dict):
                 cur_progress = existing.get("progress", 0)
-            _fetch_jobs[job_id] = {"status": "error", "progress": cur_progress, "message": str(e), "candidates": [], "total_fetched": 0, "platform_breakdown": {}, "fetch_time_ms": 0}
+        _update_fetch_job(job_id, status="error", progress=cur_progress, message=str(e), candidates=[], total_fetched=0, platform_breakdown={}, fetch_time_ms=0)
     finally:
         db.close()
 
@@ -500,8 +508,8 @@ Respond with ONLY valid JSON in this exact structure:
 def fetch_from_job_boards(payload: schemas.FetchRequest):
     """Start a background fetch and return immediately with a fetch_id for polling."""
     job_id = str(uuid.uuid4())
-    with _fetch_jobs_lock:
-        _fetch_jobs[job_id] = {"status": "processing", "progress": 0, "message": "Starting...", "candidates": [], "total_fetched": 0, "platform_breakdown": {}, "fetch_time_ms": 0}
+    _cleanup_stale_fetch_jobs()
+    _update_fetch_job(job_id, status="processing", progress=0, message="Starting...", candidates=[], total_fetched=0, platform_breakdown={}, fetch_time_ms=0)
 
     t = threading.Thread(target=_run_fetch_background, args=(job_id, payload), daemon=True)
     t.start()
@@ -511,6 +519,7 @@ def fetch_from_job_boards(payload: schemas.FetchRequest):
 
 @router.get("/fetch-status/{fetch_id}", response_model=schemas.FetchStatusResponse)
 def get_fetch_status(fetch_id: str):
+    _cleanup_stale_fetch_jobs()
     with _fetch_jobs_lock:
         job = _fetch_jobs.get(fetch_id)
     if not job:
