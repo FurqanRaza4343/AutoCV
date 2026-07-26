@@ -1200,6 +1200,7 @@ Required Skills:
                     }
                   }}
                   showToast={showToast}
+                  jobDescription={jobDescription}
                 />
 
                 {/* System Diagnostics */}

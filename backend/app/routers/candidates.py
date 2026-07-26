@@ -375,6 +375,7 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
 @router.post("/batch-analyze", response_model=schemas.BatchAnalyzeResponse)
 async def batch_analyze_cvs(
     files: list[UploadFile] = File(...),
+    job_description: str = Form(""),
     db: Session = Depends(get_db),
 ):
     if len(files) > 5:
@@ -397,9 +398,9 @@ async def batch_analyze_cvs(
             ))
             continue
 
+        jd_section = f"\nJob Description:\n{job_description[:3000]}\n" if job_description else ""
         prompt = f"""You are a senior HR Tech AI — a world-class recruitment analyst.
-Analyze the following CV/resume in detail. Extract ALL useful information and provide a comprehensive candidate assessment.
-
+Analyze the following CV/resume in detail. Extract ALL useful information and provide a comprehensive candidate assessment.{jd_section}
 CV Text:
 {cv_text[:6000]}
 

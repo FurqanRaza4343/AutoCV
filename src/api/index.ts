@@ -185,9 +185,10 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ title: "JD", text: jobDescription }),
       }),
-    batchAnalyze: async (files: File[]) => {
+    batchAnalyze: async (files: File[], jobDescription?: string) => {
       const form = new FormData();
       files.forEach((f) => form.append("files", f));
+      if (jobDescription) form.append("job_description", jobDescription);
       const token = getToken();
       const headers: Record<string, string> = {};
       if (token) headers["Authorization"] = `Bearer ${token}`;

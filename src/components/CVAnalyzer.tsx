@@ -23,11 +23,12 @@ import { motion, AnimatePresence } from "motion/react";
 import { api, CVAnalysisDTO } from "../api";
 
 interface CVAnalyzerProps {
-  onPipelineRun?: (candidateIds: string[]) => void;
+  onPipelineRun?: (ids: string[]) => void;
   showToast?: (msg: string) => void;
+  jobDescription?: string;
 }
 
-export default function CVAnalyzer({ onPipelineRun, showToast }: CVAnalyzerProps) {
+export default function CVAnalyzer({ onPipelineRun, showToast, jobDescription }: CVAnalyzerProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [analyzing, setAnalyzing] = useState(false);
   const [results, setResults] = useState<CVAnalysisDTO[]>([]);
@@ -60,7 +61,7 @@ export default function CVAnalyzer({ onPipelineRun, showToast }: CVAnalyzerProps
     setAnalyzing(true);
     setResults([]);
     try {
-      const data = await api.candidates.batchAnalyze(files);
+      const data = await api.candidates.batchAnalyze(files, jobDescription);
       setResults(data.candidates);
       if (showToast) showToast(`Analysis complete for ${data.total_processed} CV(s)`);
     } catch (e: any) {
