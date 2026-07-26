@@ -1,6 +1,7 @@
 import os
 import threading
 import time
+import requests
 from dotenv import load_dotenv
 from sqlalchemy import text
 from fastapi import FastAPI
@@ -43,6 +44,36 @@ app.include_router(notifications.router, prefix="/api")
 app.include_router(jobs.router, prefix="/api")
 app.include_router(queue.router, prefix="/api")
 app.include_router(pipeline.router, prefix="/api")
+
+
+@app.on_event("startup")
+def validate_env():
+    missing = []
+    mistral_key = os.getenv("MISTRAL_API_KEY", "")
+    if not mistral_key:
+        missing.append("MISTRAL_API_KEY")
+    else:
+        try:
+            r = requests.post(
+                "https://api.mistral.ai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {mistral_key}", "Content-Type": "application/json"},
+                json={"model": "mistral-small-latest", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1},
+                timeout=10,
+            )
+            if r.status_code == 401:
+                print("[startup] WARNING: MISTRAL_API_KEY is invalid (401)")
+            else:
+                print(f"[startup] Mistral API key validated ({r.status_code})")
+        except Exception as e:
+            print(f"[startup] WARNING: Could not validate Mistral API key: {e}")
+
+    if os.getenv("DATABASE_URL", "").startswith("postgresql://"):
+        pass
+    else:
+        missing.append("DATABASE_URL (not a postgres URL)")
+
+    if missing:
+        print(f"[startup] Missing env vars: {', '.join(missing)}")
 
 
 @app.get("/")
