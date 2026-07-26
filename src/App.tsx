@@ -887,16 +887,7 @@ Required Skills:
                   {/* Right Column: Advanced Bulk Upload Ingestion & Control Hub */}
                   <div className="space-y-6">
                       <BulkUploadZone 
-                        onFilesProcessed={(count) => {
-                          const newStaged = Array.from({ length: count }).map((_, idx) => ({
-                            id: `bulk-staged-${Date.now()}-${idx}`,
-                            name: `resume_candidate_${idx + 1}.pdf`,
-                            size: `${(Math.random() * 150 + 100).toFixed(0)} KB`,
-                            status: "staged" as const
-                          }));
-                          setStagedCvs(prev => [...prev, ...newStaged]);
-                          setFiles(prev => [...prev, ...newStaged]);
-                        }}
+                        onFilesProcessed={() => {}}
                         onFilesSelected={(fileEntries) => {
                           const newStaged = fileEntries.map((f) => ({
                             id: f.id,
