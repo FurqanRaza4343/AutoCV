@@ -74,7 +74,6 @@ def run_diagnostics(db: Session = Depends(get_db)):
         "database_connected": db_ok,
         "api_latency_ms": max(latency, 1),
         "apify_token_present": apify_ok,
-        "apify_token_prefix": apify_token[:10] + "..." if apify_token else "",
         "apify_test": apify_test,
         "total_candidates": db.query(models.Candidate).count(),
         "total_pipeline_runs": pipeline_runs,
