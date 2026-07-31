@@ -33,13 +33,15 @@ def _background_run_pipeline(run_id: str, candidate_ids: list[str], job_title: s
 
         def update_progress(done: int, total: int):
             try:
-                r = db.query(models.PipelineRun).filter(models.PipelineRun.id == run_id).first()
+                udb = SessionLocal()
+                r = udb.query(models.PipelineRun).filter(models.PipelineRun.id == run_id).first()
                 if r:
                     r.progress = min(10 + int(done / total * 55), 65)
                     r.parsed_count = done
                     r.screened_count = done
                     r.current_agent = "Parser + Screener Agent"
-                    db.commit()
+                    udb.commit()
+                udb.close()
             except Exception:
                 pass
 
