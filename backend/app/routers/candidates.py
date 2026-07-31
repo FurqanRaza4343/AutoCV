@@ -69,6 +69,8 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 
 def extract_text(file: UploadFile) -> str:
     """extract actual text from PDF/DOCX """
+    if not file.filename:
+        return ""
     filename = file.filename.lower()
     content = file.file.read()
     if len(content) > MAX_FILE_SIZE:
