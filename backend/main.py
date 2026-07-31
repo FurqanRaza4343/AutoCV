@@ -93,7 +93,7 @@ def _background_fetcher():
             if fetcher_agent and fetcher_agent.is_running:
                 from app.routers.agents import _run_fetcher_bot
                 print("[scheduler] Background fetcher: running auto-fetch cycle...")
-                _run_fetcher_bot(db)
+                _run_fetcher_bot()
             db.close()
         except Exception as e:
             print(f"[scheduler] Background fetcher error: {e}")

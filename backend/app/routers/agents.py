@@ -5,7 +5,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from ..database import get_db
+from ..database import get_db, SessionLocal
 from .. import models, schemas
 from ..email_service import send_screening_result, send_interview_invite
 
@@ -36,13 +36,13 @@ def toggle_agent(agent_id: str, payload: schemas.AgentToggle, db: Session = Depe
 
     if payload.is_running:
         if agent_id == "fetcher":
-            threading.Thread(target=_run_fetcher_bot, args=(db,), daemon=True).start()
+            threading.Thread(target=_run_fetcher_bot, daemon=True).start()
         elif agent_id == "parser":
-            threading.Thread(target=_run_parser_bot, args=(db,), daemon=True).start()
+            threading.Thread(target=_run_parser_bot, daemon=True).start()
         elif agent_id == "ranker":
-            threading.Thread(target=_run_ranker_bot, args=(db,), daemon=True).start()
+            threading.Thread(target=_run_ranker_bot, daemon=True).start()
         elif agent_id == "scheduler":
-            threading.Thread(target=_run_scheduler_bot, args=(db,), daemon=True).start()
+            threading.Thread(target=_run_scheduler_bot, daemon=True).start()
 
     return agent
 
@@ -65,26 +65,27 @@ def update_agent_config(agent_id: str, payload: schemas.AgentConfigUpdate, db: S
 
 @router.post("/fetcher/run-now")
 def trigger_fetcher_bot(db: Session = Depends(get_db)):
-    threading.Thread(target=_run_fetcher_bot, args=(db,), daemon=True).start()
+    threading.Thread(target=_run_fetcher_bot, daemon=True).start()
     return {"ok": True, "message": "Fetcher bot started in background"}
 
 @router.post("/parser/run-now")
 def trigger_parser_bot(db: Session = Depends(get_db)):
-    threading.Thread(target=_run_parser_bot, args=(db,), daemon=True).start()
+    threading.Thread(target=_run_parser_bot, daemon=True).start()
     return {"ok": True, "message": "Parser bot started in background"}
 
 @router.post("/ranker/run-now")
 def trigger_ranker_bot(db: Session = Depends(get_db)):
-    threading.Thread(target=_run_ranker_bot, args=(db,), daemon=True).start()
+    threading.Thread(target=_run_ranker_bot, daemon=True).start()
     return {"ok": True, "message": "Ranker bot started in background"}
 
 @router.post("/scheduler/send-interviews")
 def trigger_scheduler_bot(db: Session = Depends(get_db)):
-    threading.Thread(target=_run_scheduler_bot, args=(db,), daemon=True).start()
+    threading.Thread(target=_run_scheduler_bot, daemon=True).start()
     return {"ok": True, "message": "Scheduler bot started in background"}
 
 
-def _run_fetcher_bot(db: Session):
+def _run_fetcher_bot():
+    db = SessionLocal()
     try:
         from ..apify_scraper import run_rozee_scraper, run_linkedin_serp_search, normalize_rozee_to_candidate, normalize_serp_to_candidate
         from .candidates import fix_scraped_name_with_mistral, score_with_mistral
@@ -169,9 +170,12 @@ def _run_fetcher_bot(db: Session):
 
     except Exception as e:
         print(f"[fetcher-bot] Fatal error: {e}")
+    finally:
+        db.close()
 
 
-def _run_parser_bot(db: Session):
+def _run_parser_bot():
+    db = SessionLocal()
     try:
         print("[parser-bot] Starting parse cycle...")
         candidates = db.query(models.Candidate).filter(
@@ -217,9 +221,12 @@ def _run_parser_bot(db: Session):
 
     except Exception as e:
         print(f"[parser-bot] Fatal error: {e}")
+    finally:
+        db.close()
 
 
-def _run_ranker_bot(db: Session):
+def _run_ranker_bot():
+    db = SessionLocal()
     try:
         print("[ranker-bot] Starting ranking cycle...")
         jd = db.query(models.JobDescription).order_by(models.JobDescription.created_at.desc()).first()
@@ -269,9 +276,12 @@ def _run_ranker_bot(db: Session):
 
     except Exception as e:
         print(f"[ranker-bot] Fatal error: {e}")
+    finally:
+        db.close()
 
 
-def _run_scheduler_bot(db: Session):
+def _run_scheduler_bot():
+    db = SessionLocal()
     try:
         print("[scheduler-bot] Starting auto-interview scheduling...")
         pipeline_results = db.query(models.PipelineResult).filter(
@@ -301,3 +311,5 @@ def _run_scheduler_bot(db: Session):
 
     except Exception as e:
         print(f"[scheduler-bot] Error: {e}")
+    finally:
+        db.close()
