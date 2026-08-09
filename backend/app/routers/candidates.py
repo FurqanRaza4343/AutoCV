@@ -9,18 +9,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pdfplumber
 import docx
-import requests
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal, get_db
 from .. import models, schemas
 from ..apify_scraper import (
-    run_rozee_scraper,
     run_linkedin_serp_search,
-    normalize_rozee_to_candidate,
     normalize_serp_to_candidate,
 )
+from ..pipeline_agents import _call_mistral_safe
 
 router = APIRouter(prefix="/candidates", tags=["candidates"])
 
@@ -61,7 +59,6 @@ def clean_name(raw: str) -> str:
         parts = cleaned.split()
         cleaned = ' '.join(parts[:3])
     return cleaned.strip()[:100] or "Unknown"
-MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
 
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
@@ -121,53 +118,60 @@ CV Text:
 Respond with ONLY valid JSON, no markdown, no explanation."""
 
     try:
-        response = requests.post(
-            MISTRAL_URL,
-            headers={
-                "Authorization": f"Bearer {MISTRAL_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "mistral-small-latest",
-                "messages": [{"role": "user", "content": prompt}],
-                "response_format": {"type": "json_object"},
-            },
-            timeout=30,
-        )
-        response.raise_for_status()
-        text = response.json()["choices"][0]["message"]["content"].strip()
-        match = re.search(r"\{[\s\S]*\}", text)
+        raw = _call_mistral_safe(prompt, {"type": "json_object"})
+        match = re.search(r"\{[\s\S]*\}", raw)
         if match:
-            return json.loads(match.group(0))
+            data = json.loads(match.group(0))
+            if isinstance(data.get("score"), (int, float)):
+                data["status"] = "ok"
+                return data
     except Exception:
         pass
 
-    return {"name": "Unknown Candidate", "role": "Software Engineer", "score": 75,
-            "summary": "Automated scoring fallback - Mistral call failed.", "email": "",
+    return {"name": None, "role": "Software Engineer", "score": None, "status": "failed",
+            "summary": "AI scoring failed for this candidate - retry recommended.", "email": "",
             "gender": None, "shift_preference": "Any", "age": None,
             "is_remote": None, "skills": "", "experience_years": None}
 
 
+def score_lead_lightweight(headline_role: str, skills_snippet: str, summary: str, job_description: str) -> dict:
+    """Lightweight score for a lead with no CV text - headline/skills-snippet only.
+    Always low-confidence; callers must label it as such rather than a full verdict."""
+    prompt = f"""You are a recruiting sourcer AI. You only have a public headline and a short
+snippet for this lead - NOT a resume. Give a rough, conservative fit estimate against the job.
+
+Job Description:
+{job_description[:1500]}
+
+Lead headline/role: {headline_role}
+Skills/snippet: {skills_snippet}
+Summary snippet: {summary}
+
+Respond with ONLY valid JSON:
+{{"score": <integer 0-100, be conservative without a real CV>, "summary": "1-2 sentence note"}}"""
+    try:
+        raw = _call_mistral_safe(prompt, {"type": "json_object"})
+        match = re.search(r"\{[\s\S]*\}", raw)
+        if match:
+            data = json.loads(match.group(0))
+            if isinstance(data.get("score"), (int, float)):
+                # Cap low-confidence leads below the "fully screened" score band so they
+                # never masquerade as a properly evaluated candidate.
+                return {"status": "ok", "score": min(int(data["score"]), 65), "summary": data.get("summary", "")}
+    except Exception:
+        pass
+    return {"status": "failed", "score": None, "summary": ""}
 
 
 def fix_scraped_name_with_mistral(raw_name: str, raw_data: str, jd_text: str) -> str:
-    if "Candidate - " not in raw_name and "@linkedin.com" not in raw_name:
-        return raw_name
     try:
         prompt = f"""Extract the real candidate name from this job board data.
 The raw title/name is: {raw_name}
 Raw data: {raw_data[:1500]}
 Job: {jd_text[:500]}
 Respond with ONLY a valid JSON: {{"name": "real full name"}}"""
-        resp = requests.post(
-            MISTRAL_URL,
-            headers={"Authorization": f"Bearer {MISTRAL_API_KEY}", "Content-Type": "application/json"},
-            json={"model": "mistral-small-latest", "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}},
-            timeout=30,
-        )
-        data = resp.json()["choices"][0]["message"]["content"].strip()
-        import re
-        m = re.search(r'\{[\s\S]*\}', data)
+        raw = _call_mistral_safe(prompt, {"type": "json_object"})
+        m = re.search(r'\{[\s\S]*\}', raw)
         if m:
             parsed = json.loads(m.group(0))
             name = parsed.get("name", "").strip()
@@ -223,18 +227,6 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
         f = payload.filters
         loc = f.location if f else None
 
-        _update_fetch_job(job_id, status="processing", progress=5, message="Scraping Rozee.pk...")
-        try:
-            rozee_items = run_rozee_scraper(keyword, loc, payload.max_results_per_source)
-            print(f"[bg-fetch] Rozee returned {len(rozee_items)} items")
-            if rozee_items:
-                for item in rozee_items:
-                    cand = normalize_rozee_to_candidate(item, payload.job_description)
-                    all_candidates.append(cand)
-                platform_counts["Rozee.pk"] = len(rozee_items)
-        except Exception as e:
-            print(f"[bg-fetch] Rozee error: {e}\n{_tb.format_exc()}")
-
         _update_fetch_job(job_id, status="processing", progress=15, message="Searching LinkedIn...")
         try:
             serp_items = run_linkedin_serp_search(keyword, loc, payload.max_results_per_source)
@@ -259,33 +251,48 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
         done_count = 0
 
         def score_one(idx: int, cand: dict) -> tuple[int, dict]:
+            # Baseline sanitizer runs unconditionally - never let a raw scraped
+            # headline/title reach the DB as a "name".
+            cand["name"] = clean_name(cand.get("name", ""))
+            has_cv = bool(cand.get("has_cv", True))
             cv_text = cand.get("cv_text", "")
-            raw_name = cand.get("name", "")
-            # fix name for scraped candidates
-            if ("Candidate - " in raw_name or "@linkedin.com" in raw_name) and cv_text and MISTRAL_API_KEY:
-                fixed = fix_scraped_name_with_mistral(raw_name, cv_text, payload.job_description)
-                if fixed != raw_name:
+
+            if has_cv and cv_text and MISTRAL_API_KEY:
+                fixed = fix_scraped_name_with_mistral(cand["name"], cv_text, payload.job_description)
+                if fixed != cand["name"]:
                     cand["name"] = clean_name(fixed)
-            # run score
-            if cv_text and MISTRAL_API_KEY:
-                try:
-                    result = score_with_mistral(cv_text, payload.job_description)
-                    cand["match_score"] = int(result.get("score", 50))
+
+                result = score_with_mistral(cv_text, payload.job_description)
+                if result.get("status") == "ok":
+                    cand["match_score"] = result.get("score")
                     cand["summary"] = result.get("summary", cand.get("summary", ""))
-                    name = result.get("name", "")
+                    name = result.get("name") or ""
                     if name and len(name) > 3 and "Candidate" not in name:
                         cand["name"] = clean_name(name)
-                    cand["email"] = result.get("email", cand.get("email", ""))
+                    if result.get("email"):
+                        cand["email"] = result["email"]
                     if result.get("gender"):       cand["gender"] = cand["gender"] or result["gender"]
                     if result.get("shift_preference"): cand["shift_preference"] = result.get("shift_preference", cand.get("shift_preference"))
                     if result.get("age") is not None:           cand["age"] = cand["age"] or result["age"]
                     if result.get("is_remote") is not None: cand["is_remote"] = result["is_remote"]
                     if result.get("skills"):        cand["skills"] = result["skills"]
                     if result.get("experience_years") is not None: cand["experience_years"] = cand["experience_years"] or result["experience_years"]
-                except Exception:
-                    cand["match_score"] = 50
+                else:
+                    cand["match_score"] = None
+                    cand["current_stage"] = "Needs Rescoring"
+            elif MISTRAL_API_KEY:
+                # No real CV - only a public headline/snippet. Score conservatively and
+                # label it clearly instead of pretending this is a fully-screened candidate.
+                result = score_lead_lightweight(
+                    cand.get("role", ""), cand.get("skills", ""), cand.get("summary", ""), payload.job_description
+                )
+                cand["match_score"] = result.get("score")
+                if result.get("summary"):
+                    cand["summary"] = result["summary"]
+                cand["current_stage"] = "Low Confidence — No CV"
             else:
-                cand["match_score"] = 50
+                cand["match_score"] = None
+                cand["current_stage"] = "Needs Rescoring"
             return idx, cand
 
         with ThreadPoolExecutor(max_workers=8) as pool:
@@ -399,20 +406,12 @@ async def batch_analyze_cvs(
     if not files:
         raise HTTPException(400, "No files provided")
 
-    results = []
-    for file in files:
-        cv_text = extract_text(file)
+    # Text extraction is cheap/local - do it up front, sequentially.
+    extracted = [(file, extract_text(file)) for file in files]
+
+    def analyze_one(file: UploadFile, cv_text: str) -> dict:
         if not cv_text:
-            results.append(schemas.CVAnalysisOut(
-                name=file.filename or "Unknown",
-                email="",
-                role="",
-                score=0,
-                summary="Unable to extract text from file",
-                skills="",
-                overall_verdict="Error: Unreadable file",
-            ))
-            continue
+            return {"file": file, "cv_text": cv_text, "data": None, "unreadable": True}
 
         jd_section = f"\nJob Description:\n{job_description[:3000]}\n" if job_description else ""
         prompt = f"""You are a senior HR Tech AI — a world-class recruitment analyst.
@@ -441,31 +440,47 @@ Respond with ONLY valid JSON in this exact structure:
 }}"""
 
         try:
-            response = requests.post(
-                MISTRAL_URL,
-                headers={"Authorization": f"Bearer {MISTRAL_API_KEY}", "Content-Type": "application/json"},
-                json={
-                    "model": "mistral-small-latest",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "response_format": {"type": "json_object"},
-                    "max_tokens": 3000,
-                },
-                timeout=(10, 30),
-            )
-            response.raise_for_status()
-            text = response.json()["choices"][0]["message"]["content"].strip()
-            match = re.search(r"\{[\s\S]*\}", text)
+            raw = _call_mistral_safe(prompt, {"type": "json_object"})
+            match = re.search(r"\{[\s\S]*\}", raw)
             data = json.loads(match.group(0)) if match else {}
+            if not isinstance(data.get("score"), (int, float)):
+                data = None
         except Exception:
-            data = {}
+            data = None
+
+        return {"file": file, "cv_text": cv_text, "data": data, "unreadable": False}
+
+    with ThreadPoolExecutor(max_workers=min(5, len(extracted) or 1)) as pool:
+        analyzed = list(pool.map(lambda pair: analyze_one(*pair), extracted))
+
+    results = []
+    for item in analyzed:
+        file = item["file"]
+        cv_text = item["cv_text"]
+
+        if item["unreadable"]:
+            results.append(schemas.CVAnalysisOut(
+                name=file.filename or "Unknown",
+                email="",
+                role="",
+                score=0,
+                summary="Unable to extract text from file",
+                skills="",
+                overall_verdict="Error: Unreadable file",
+            ))
+            continue
+
+        data = item["data"]
+        scoring_failed = data is None
+        data = data or {}
 
         # Save to DB so candidate has an ID for pipeline
         candidate = models.Candidate(
             name=data.get("name", file.filename or "Unknown")[:100],
             email=data.get("email", "")[:200],
             role=data.get("role", "Professional")[:100],
-            match_score=int(data.get("score", 50)),
-            summary=data.get("summary", "")[:1000],
+            match_score=None if scoring_failed else int(data["score"]),
+            summary=data.get("summary", "")[:1000] if not scoring_failed else "AI analysis failed for this CV - retry recommended.",
             cv_text=cv_text[:50000],
             skills=data.get("skills", ""),
             experience_years=data.get("experience_years"),
@@ -477,7 +492,7 @@ Respond with ONLY valid JSON in this exact structure:
             department="Engineering",
             applied_date=date.today().isoformat(),
             status="Screening",
-            current_stage="Awaiting Ranking",
+            current_stage="Needs Rescoring" if scoring_failed else "Awaiting Ranking",
         )
         db.add(candidate)
         db.flush()
@@ -487,8 +502,8 @@ Respond with ONLY valid JSON in this exact structure:
             name=data.get("name", file.filename or "Unknown"),
             email=data.get("email", ""),
             role=data.get("role", "Professional"),
-            score=int(data.get("score", 50)),
-            summary=data.get("summary", ""),
+            score=0 if scoring_failed else int(data["score"]),
+            summary=candidate.summary,
             skills=data.get("skills", ""),
             experience_years=data.get("experience_years"),
             gender=data.get("gender"),
@@ -499,7 +514,7 @@ Respond with ONLY valid JSON in this exact structure:
             strengths=data.get("strengths", []),
             areas_for_improvement=data.get("areas_for_improvement", []),
             detailed_assessment=data.get("detailed_assessment", ""),
-            overall_verdict=data.get("overall_verdict", "Consider"),
+            overall_verdict="Error: Scoring Failed" if scoring_failed else data.get("overall_verdict", "Consider"),
         ))
 
     db.commit()
@@ -555,6 +570,7 @@ async def upload_and_score(
         raise HTTPException(400, "unable to extract text from CV .Only .pdf/.docx  is supported")
 
     result = score_with_mistral(cv_text, job_description)
+    scoring_failed = result.get("status") != "ok"
 
     candidate = models.Candidate(
         name=clean_name(result.get("name", "Unknown")),
@@ -562,9 +578,9 @@ async def upload_and_score(
         role=result.get("role", "Software Engineer"),
         department="Engineering",
         applied_date=date.today().isoformat(),
-        match_score=int(result.get("score", 75)),
+        match_score=result.get("score"),
         status="Screening",
-        current_stage="Awaiting Ranking",
+        current_stage="Needs Rescoring" if scoring_failed else "Awaiting Ranking",
         summary=result.get("summary", ""),
         cv_text=cv_text,
         gender=result.get("gender"),
