@@ -12,11 +12,20 @@ from sqlalchemy.orm import Session
 from ..database import SessionLocal, get_db
 from .. import models, schemas
 from ..pipeline_agents import run_pipeline_parallel
+from .auth import get_current_user
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
 
 def _background_run_pipeline(run_id: str, candidate_ids: list[str], job_title: str, job_description: str):
+    # Fetch candidates and close this session immediately - it must not sit open and
+    # idle for the whole parse+screen duration (which can run tens of seconds across
+    # several Mistral calls). A connection held idle-but-checked-out for that long can
+    # go stale server-side (managed Postgres proxy idle timeout) in a way pool_pre_ping
+    # doesn't catch (it only re-validates connections when they're re-acquired FROM the
+    # pool, not ones a session is still actively holding) - the previous version reused
+    # this same long-idle connection for the post-scoring commit, which is exactly where
+    # pipeline runs were hanging indefinitely.
     db = SessionLocal()
     try:
         run = db.query(models.PipelineRun).filter(models.PipelineRun.id == run_id).first()
@@ -28,24 +37,36 @@ def _background_run_pipeline(run_id: str, candidate_ids: list[str], job_title: s
             c = db.query(models.Candidate).filter(models.Candidate.id == cid).first()
             if c:
                 candidates_map[cid] = c
+    finally:
+        db.close()
 
-        total = len(candidate_ids)
+    total = len(candidate_ids)
 
-        def update_progress(done: int, total: int):
-            try:
-                udb = SessionLocal()
-                r = udb.query(models.PipelineRun).filter(models.PipelineRun.id == run_id).first()
-                if r:
-                    r.progress = min(10 + int(done / total * 55), 65)
-                    r.parsed_count = done
-                    r.screened_count = done
-                    r.current_agent = "Parser + Screener Agent"
-                    udb.commit()
-                udb.close()
-            except Exception:
-                pass
+    def update_progress(done: int, total: int):
+        # Runs once per candidate from inside the parse+screen thread pool - every
+        # session opened must be closed unconditionally, not just on the success path.
+        udb = SessionLocal()
+        try:
+            r = udb.query(models.PipelineRun).filter(models.PipelineRun.id == run_id).first()
+            if r:
+                r.progress = min(10 + int(done / total * 55), 65)
+                r.parsed_count = done
+                r.screened_count = done
+                r.current_agent = "Parser + Screener Agent"
+                udb.commit()
+        except Exception:
+            pass
+        finally:
+            udb.close()
 
-        working_data = run_pipeline_parallel(candidates_map, candidate_ids, job_description, progress_callback=update_progress)
+    working_data = run_pipeline_parallel(candidates_map, candidate_ids, job_description, progress_callback=update_progress)
+
+    # Fresh session for the write-back phase - the one above is long gone by now.
+    db = SessionLocal()
+    try:
+        run = db.query(models.PipelineRun).filter(models.PipelineRun.id == run_id).first()
+        if not run:
+            return
 
         run.current_agent = "Deep Ranker + Finalizer Agent"
         run.progress = 70
@@ -93,7 +114,10 @@ def _background_run_pipeline(run_id: str, candidate_ids: list[str], job_title: s
             )
             db.add(result)
 
-            orig = candidates_map.get(wd["candidate_id"])
+            # candidates_map holds objects loaded in the earlier (now-closed) session -
+            # they're detached, so mutating them wouldn't be tracked by this session.
+            # Re-fetch by id instead of reusing the stale reference.
+            orig = db.query(models.Candidate).filter(models.Candidate.id == wd["candidate_id"]).first()
             if orig:
                 orig.match_score = r.get("ranked_score") or s.get("screened_score") or orig.match_score
                 orig.current_stage = "Done"
@@ -119,19 +143,25 @@ def _background_run_pipeline(run_id: str, candidate_ids: list[str], job_title: s
 
 
 @router.post("/run")
-def run_pipeline(payload: schemas.PipelineRunCreate, db: Session = Depends(get_db)):
+def run_pipeline(payload: schemas.PipelineRunCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     job_title = payload.job_title or "Software Engineer"
     job_description = payload.job_description or ""
     candidate_ids = payload.candidate_ids
 
     if not candidate_ids:
-        all_candidates = db.query(models.Candidate).order_by(models.Candidate.created_at.desc()).limit(50).all()
+        all_candidates = db.query(models.Candidate).filter(models.Candidate.user_id == current_user.id).order_by(models.Candidate.created_at.desc()).limit(50).all()
         candidate_ids = [c.id for c in all_candidates]
+    else:
+        # Explicit ids from the client are still constrained to this user's own
+        # candidates - never let a request run the pipeline over someone else's data.
+        owned = db.query(models.Candidate.id).filter(models.Candidate.id.in_(candidate_ids), models.Candidate.user_id == current_user.id).all()
+        candidate_ids = [c.id for c in owned]
 
     if not candidate_ids:
         raise HTTPException(400, "No candidates found to run the pipeline. Fetch or upload candidates first.")
 
     run = models.PipelineRun(
+        user_id=current_user.id,
         job_title=job_title,
         job_description=job_description,
         status="running",
@@ -155,13 +185,13 @@ def run_pipeline(payload: schemas.PipelineRunCreate, db: Session = Depends(get_d
 
 
 @router.get("/runs", response_model=list[schemas.PipelineRunOut])
-def list_pipeline_runs(db: Session = Depends(get_db)):
-    return db.query(models.PipelineRun).order_by(models.PipelineRun.created_at.desc()).all()
+def list_pipeline_runs(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    return db.query(models.PipelineRun).filter(models.PipelineRun.user_id == current_user.id).order_by(models.PipelineRun.created_at.desc()).all()
 
 
 @router.get("/runs/{run_id}", response_model=schemas.PipelineFullOut)
-def get_pipeline_run(run_id: str, db: Session = Depends(get_db)):
-    run = db.query(models.PipelineRun).filter(models.PipelineRun.id == run_id).first()
+def get_pipeline_run(run_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    run = db.query(models.PipelineRun).filter(models.PipelineRun.id == run_id, models.PipelineRun.user_id == current_user.id).first()
     if not run:
         raise HTTPException(404, "Pipeline run not found")
     results = db.query(models.PipelineResult).filter(models.PipelineResult.run_id == run_id).order_by(models.PipelineResult.rank_position).all()
@@ -172,16 +202,30 @@ def get_pipeline_run(run_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/runs/{run_id}/results")
-def get_pipeline_results(run_id: str, db: Session = Depends(get_db)):
+def get_pipeline_results(run_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    run = db.query(models.PipelineRun).filter(models.PipelineRun.id == run_id, models.PipelineRun.user_id == current_user.id).first()
+    if not run:
+        raise HTTPException(404, "Pipeline run not found")
     results = db.query(models.PipelineResult).filter(models.PipelineResult.run_id == run_id).order_by(models.PipelineResult.rank_position).all()
     return [schemas.PipelineResultOut.model_validate(r) for r in results]
 
 
-@router.get("/results/{result_id}/export-txt")
-def export_result_txt(result_id: str, db: Session = Depends(get_db)):
-    r = db.query(models.PipelineResult).filter(models.PipelineResult.id == result_id).first()
+def _get_owned_result(db: Session, result_id: str, user_id: str) -> models.PipelineResult:
+    """PipelineResult has no user_id of its own - ownership is via its PipelineRun."""
+    r = (
+        db.query(models.PipelineResult)
+        .join(models.PipelineRun, models.PipelineResult.run_id == models.PipelineRun.id)
+        .filter(models.PipelineResult.id == result_id, models.PipelineRun.user_id == user_id)
+        .first()
+    )
     if not r:
         raise HTTPException(404, "Result not found")
+    return r
+
+
+@router.get("/results/{result_id}/export-txt")
+def export_result_txt(result_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    r = _get_owned_result(db, result_id, current_user.id)
 
     lines = [
         "=" * 60,
@@ -232,15 +276,13 @@ def export_result_txt(result_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/results/{result_id}/export-xlsx")
-def export_result_xlsx(result_id: str, db: Session = Depends(get_db)):
+def export_result_xlsx(result_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     try:
         from openpyxl import Workbook
     except ImportError:
         raise HTTPException(500, "openpyxl not installed. Run: pip install openpyxl")
 
-    r = db.query(models.PipelineResult).filter(models.PipelineResult.id == result_id).first()
-    if not r:
-        raise HTTPException(404, "Result not found")
+    r = _get_owned_result(db, result_id, current_user.id)
 
     wb = Workbook()
     ws = wb.active
@@ -275,7 +317,7 @@ def export_result_xlsx(result_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/results/{result_id}/export-pdf")
-def export_result_pdf(result_id: str, db: Session = Depends(get_db)):
+def export_result_pdf(result_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     try:
         from fpdf import FPDF
     except ImportError:
@@ -284,9 +326,7 @@ def export_result_pdf(result_id: str, db: Session = Depends(get_db)):
         except ImportError:
             raise HTTPException(500, "fpdf2 not installed. Run: pip install fpdf2")
 
-    r = db.query(models.PipelineResult).filter(models.PipelineResult.id == result_id).first()
-    if not r:
-        raise HTTPException(404, "Result not found")
+    r = _get_owned_result(db, result_id, current_user.id)
 
     pdf = FPDF()
     pdf.add_page()
