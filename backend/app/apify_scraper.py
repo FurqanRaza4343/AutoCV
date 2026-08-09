@@ -63,25 +63,6 @@ def _apify_call(actor_name: str, run_input: dict, timeout_secs: int = 120):
         return []
 
 
-def run_rozee_scraper(keyword: str, city: Optional[str] = None, max_results: int = 20):
-    queries = [keyword]
-    locations = []
-    if city:
-        locations.append(city)
-
-    run_input = {
-        "searchQueries": queries,
-        "locations": locations,
-        "maxItemsPerQuery": max_results,
-        "scrapeJobDetails": True,
-    }
-
-    print(f"[rozee] Starting scrape: keyword={keyword}, locations={locations}, max={max_results}")
-    items = _apify_call("memo23~rozee-scraper", run_input)
-    print(f"[rozee] Got {len(items)} items")
-    return items
-
-
 def run_linkedin_serp_search(keyword: str, location: str = "", max_results: int = 10) -> list[dict]:
     if not SERPAPI_KEY:
         print("[serp] No SerpAPI key configured")
@@ -110,15 +91,16 @@ def run_linkedin_serp_search(keyword: str, location: str = "", max_results: int 
             snippet = item.get("snippet", "")
             link = item.get("link", "")
 
-            name = title.replace(" - LinkedIn", "").replace(" - Profiles", "").strip() if title else "Unknown"
             if "linkedin.com/in/" not in link:
                 continue
 
-            role = ""
-            if " - " in title:
-                parts = title.split(" - ")
-                if len(parts) > 1:
-                    role = parts[-1].strip()
+            clean_title = title.replace(" - LinkedIn", "").replace(" - Profiles", "").strip() if title else "Unknown"
+            # Google-indexed titles are usually "Name - Role - LinkedIn" or a full headline
+            # like "Name - Role | Talks about ...". Only the first segment is ever a person's
+            # name - never fall back to the whole headline string.
+            segments = re.split(r"\s*[-|]\s*", clean_title)
+            name = (segments[0].strip() if segments and segments[0].strip() else "Unknown")[:60]
+            role = segments[1].strip() if len(segments) > 1 else ""
 
             location_found = location if location else ""
             snippet_lower = snippet.lower()
@@ -178,92 +160,10 @@ def normalize_serp_to_candidate(item: dict, job_description: str) -> dict:
         "skills": skills,
         "experience_years": exp_years,
         "phone": None,
+        # No resume text is available for a SERP-sourced lead - only a headline/snippet.
+        # Downstream scoring must treat this as low-confidence, not a fully-screened candidate.
+        "has_cv": False,
+        "confidence": "low",
     }
-
-
-def run_indeed_job_scraper(keyword: str, location: str = "", max_results: int = 20):
-    run_input = {
-        "searchTerms": [keyword],
-        "location": location or "Pakistan",
-        "maxResults": max_results,
-    }
-    return _apify_call("newbs~indeed-job-scraper", run_input)
-
-
-def normalize_rozee_to_candidate(item: dict, job_description: str) -> dict:
-    title = item.get("title", "")
-    company_obj = item.get("company", {}) or {}
-    company = company_obj.get("name", "") if isinstance(company_obj, dict) else str(company_obj)
-    city = item.get("city", "")
-    skills_raw = item.get("skills", [])
-    if isinstance(skills_raw, str):
-        skills_raw = [s.strip() for s in skills_raw.split(",")]
-    skills = ", ".join(skills_raw) if isinstance(skills_raw, list) else str(skills_raw)
-    gender = item.get("gender", "") or item.get("genderPreference", "")
-    career_level = item.get("careerLevel", "")
-    exp_obj = item.get("experience", {}) or {}
-    experience_str = exp_obj.get("formatted", "") if isinstance(exp_obj, dict) else str(exp_obj)
-    salary_obj = item.get("salary", {}) or {}
-    salary = salary_obj.get("formatted", "") if isinstance(salary_obj, dict) else str(salary_obj)
-    description_text = item.get("description", "") or item.get("descriptionHtml", "") or ""
-
-    import re
-    exp_years = None
-    if experience_str:
-        nums = re.findall(r"\d+", experience_str)
-        if nums:
-            exp_years = int(nums[0])
-
-    age_estimate = None
-    if exp_years:
-        age_estimate = exp_years + 22
-
-    shift = "Morning"
-    if "night" in description_text.lower() or "shift" in description_text.lower():
-        if "night" in description_text.lower():
-            shift = "Night"
-        elif "evening" in description_text.lower():
-            shift = "Evening"
-
-    is_remote_val = None
-    if "remote" in description_text.lower() or "work from home" in description_text.lower() or "wfh" in description_text.lower():
-        is_remote_val = True
-    elif "on-site" in description_text.lower() or "onsite" in description_text.lower():
-        is_remote_val = False
-
-    summary_parts = []
-    if title:
-        summary_parts.append(f"Position: {title}")
-    if company:
-        summary_parts.append(f"at {company}")
-    if skills:
-        summary_parts.append(f"Skills: {skills}")
-    if experience_str:
-        summary_parts.append(f"Experience: {experience_str}")
-    if salary:
-        summary_parts.append(f"Salary: {salary}")
-
-    return {
-        "name": f"Candidate - {title[:30]}",
-        "email": f"{title.lower().replace(' ', '.')}@{company.lower().replace(' ', '') if company else 'example'}.com",
-        "role": title,
-        "department": "Engineering",
-        "applied_date": "",
-        "match_score": None,
-        "status": "Screening",
-        "current_stage": "Awaiting Ranking",
-        "summary": ". ".join(summary_parts) if summary_parts else description_text[:300],
-        "cv_text": json.dumps(item),
-        "gender": gender or None,
-        "shift_preference": shift,
-        "age": age_estimate,
-        "source_platform": "Rozee.pk",
-        "is_remote": is_remote_val,
-        "location": city,
-        "skills": skills,
-        "experience_years": exp_years,
-        "phone": None,
-    }
-
 
 
