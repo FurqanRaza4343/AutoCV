@@ -19,6 +19,7 @@ import PipelineRunner from "./components/PipelineRunner";
 import ResultsDashboard from "./components/ResultsDashboard";
 import CVAnalyzer from "./components/CVAnalyzer";
 import { CandidateDTO } from "./api";
+import { NAV_ITEMS } from "./navConfig";
 
 // Define TypeScript interfaces for our application state
 interface AIAgent {
@@ -130,6 +131,31 @@ export default function App() {
   const avgMatch = scored.length ? Math.round(scored.reduce((a, c) => a + (c.matchScore ?? 0), 0) / scored.length) : 0;
   const avgMatchScoreLabel = `${avgMatch}% Match`;
 
+  // Sidebar badge per nav item id - kept in one place so the mobile drawer and
+  // desktop sidebar (both driven by NAV_ITEMS) can never show different badges.
+  const getSidebarBadge = (navId: string): { badge?: string; badgeClass?: string } => {
+    switch (navId) {
+      case "dashboard":
+        return { badge: "1 Draft", badgeClass: "bg-amber-50 text-amber-700 border border-amber-200/50" };
+      case "pipeline":
+        return {
+          badge: pipelineRuns.length > 0 ? `${pipelineRuns.length} Runs` : undefined,
+          badgeClass: "bg-indigo-50 text-indigo-700 border border-indigo-200/50",
+        };
+      case "candidates":
+        return { badge: `${candidates.length} New`, badgeClass: "bg-blue-50 text-blue-700 border border-blue-200/50" };
+      case "agents":
+        return {
+          badge: plural(agents.filter(a => a.isRunning).length, "Active"),
+          badgeClass: "bg-purple-50 text-purple-700 border border-purple-200/50",
+        };
+      case "analytics":
+        return { badge: avgMatchScoreLabel, badgeClass: "bg-emerald-50 text-emerald-700 border border-emerald-200/50" };
+      default:
+        return {};
+    }
+  };
+
   // 1. Load initial data from backend on mount
   useEffect(() => {
     useAppStore.getState().fetchCandidates();
@@ -188,7 +214,6 @@ Required Skills:
   const [files, setFiles] = useState<any[]>([]);
   const [actualFiles, setActualFiles] = useState<Map<string, File>>(new Map());
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
-  const [isLeaderboardRevealed, setIsLeaderboardRevealed] = useState<boolean>(false);
   const [isScoringRunning, setIsScoringRunning] = useState(false);
   const [scoringProgress, setScoringProgress] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
@@ -406,7 +431,6 @@ Required Skills:
     setIsProcessing(false);
     setIsScoringRunning(false);
     setScoringProgress(0);
-    setIsLeaderboardRevealed(true);
 
     await useAppStore.getState().fetchCandidates();
 
@@ -676,52 +700,20 @@ Required Skills:
                     </button>
                   </div>
                   <div className="space-y-1">
-                    <SidebarItem
-                      tab="dashboard"
-                      label="Home / Overview"
-                      currentTab={currentTab}
-                      onNavigate={(t) => { setCurrentTab(t); setIsSidebarOpen(false); }}
-                    />
-                    <SidebarItem
-                      tab="dashboard"
-                      label="Dashboard"
-                      badge="1 Draft"
-                      badgeClass="bg-amber-50 text-amber-700 border border-amber-200/50"
-                      currentTab={currentTab}
-                      onNavigate={(t) => { setCurrentTab(t); setIsSidebarOpen(false); }}
-                    />
-                    <SidebarItem
-                      tab="agents"
-                      label="AI Agents"
-                      badge={plural(agents.filter(a => a.isRunning).length, "Active")}
-                      badgeClass="bg-purple-50 text-purple-700 border border-purple-200/50"
-                      currentTab={currentTab}
-                      onNavigate={(t) => { setCurrentTab(t); setIsSidebarOpen(false); }}
-                    />
-                    <SidebarItem
-                      tab="candidates"
-                      label="Candidates"
-                      badge={`${candidates.length} New`}
-                      badgeClass="bg-blue-50 text-blue-700 border border-blue-200/50"
-                      currentTab={currentTab}
-                      onNavigate={(t) => { setCurrentTab(t); setIsSidebarOpen(false); }}
-                    />
-                    <SidebarItem
-                      tab="analytics"
-                      label="Analytics"
-                      badge={avgMatchScoreLabel}
-                      badgeClass="bg-emerald-50 text-emerald-700 border border-emerald-200/50"
-                      currentTab={currentTab}
-                      onNavigate={(t) => { setCurrentTab(t); setIsSidebarOpen(false); }}
-                    />
-                    <SidebarItem
-                      tab="pipeline"
-                      label="AI Pipeline"
-                      badge={pipelineRuns.length > 0 ? `${pipelineRuns.length} Runs` : undefined}
-                      badgeClass="bg-indigo-50 text-indigo-700 border border-indigo-200/50"
-                      currentTab={currentTab}
-                      onNavigate={(t) => { setCurrentTab(t); setIsSidebarOpen(false); }}
-                    />
+                    {NAV_ITEMS.map((item) => {
+                      const { badge, badgeClass } = getSidebarBadge(item.id);
+                      return (
+                        <SidebarItem
+                          key={item.id}
+                          tab={item.id}
+                          label={item.label}
+                          badge={badge}
+                          badgeClass={badgeClass}
+                          currentTab={currentTab}
+                          onNavigate={(t) => { setCurrentTab(t); setIsSidebarOpen(false); }}
+                        />
+                      );
+                    })}
                   </div>
                 </motion.aside>
               </>
@@ -734,52 +726,20 @@ Required Skills:
               <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Main Menu</span>
             </div>
             <nav className="flex-1 overflow-y-auto p-3 space-y-1">
-              <SidebarItem
-                tab="dashboard"
-                label="Home / Overview"
-                currentTab={currentTab}
-                onNavigate={setCurrentTab}
-              />
-              <SidebarItem
-                tab="dashboard"
-                label="Dashboard"
-                badge="1 Draft"
-                badgeClass="bg-amber-50 text-amber-700 border border-amber-200/50"
-                currentTab={currentTab}
-                onNavigate={setCurrentTab}
-              />
-              <SidebarItem
-                tab="agents"
-                label="AI Agents"
-                badge={plural(agents.filter(a => a.isRunning).length, "Active")}
-                badgeClass="bg-purple-50 text-purple-700 border border-purple-200/50"
-                currentTab={currentTab}
-                onNavigate={setCurrentTab}
-              />
-              <SidebarItem
-                tab="candidates"
-                label="Candidates"
-                badge={`${candidates.length} New`}
-                badgeClass="bg-blue-50 text-blue-700 border border-blue-200/50"
-                currentTab={currentTab}
-                onNavigate={setCurrentTab}
-              />
-              <SidebarItem
-                tab="analytics"
-                label="Analytics"
-                badge={avgMatchScoreLabel}
-                badgeClass="bg-emerald-50 text-emerald-700 border border-emerald-200/50"
-                currentTab={currentTab}
-                onNavigate={setCurrentTab}
-              />
-              <SidebarItem
-                tab="pipeline"
-                label="AI Pipeline"
-                badge={pipelineRuns.length > 0 ? `${pipelineRuns.length} Runs` : undefined}
-                badgeClass="bg-indigo-50 text-indigo-700 border border-indigo-200/50"
-                currentTab={currentTab}
-                onNavigate={setCurrentTab}
-              />
+              {NAV_ITEMS.map((item) => {
+                const { badge, badgeClass } = getSidebarBadge(item.id);
+                return (
+                  <SidebarItem
+                    key={item.id}
+                    tab={item.id}
+                    label={item.label}
+                    badge={badge}
+                    badgeClass={badgeClass}
+                    currentTab={currentTab}
+                    onNavigate={setCurrentTab}
+                  />
+                );
+              })}
             </nav>
           </aside>
 
@@ -787,22 +747,24 @@ Required Skills:
           <main className="flex-1 min-w-0 px-4 py-6 md:px-8 overflow-y-auto">
             <div className="w-full max-w-6xl mx-auto space-y-6 md:space-y-8">
         
-        {/* Page Title */}
+        {/* Page Title - driven by the shared NAV_ITEMS config so every tab gets the
+            same eyebrow / title / subtitle pattern instead of a one-off per tab. */}
         <div className="mb-6 md:mb-8">
-          {currentTab === "agents" ? (
-            <div>
-              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">Agent Control</span>
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl mt-1">AI Agents Management</h1>
-              <p className="text-xs text-slate-500 mt-1.5">Agent Orchestration &amp; Advanced Analytics</p>
-            </div>
-          ) : (
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
-              {currentTab === "dashboard" && "Dashboard"}
-              {currentTab === "candidates" && "Candidates"}
-              {currentTab === "analytics" && "Analytics"}
-              {currentTab === "pipeline" && "AI Pipeline"}
-            </h1>
-          )}
+          {(() => {
+            const navItem = NAV_ITEMS.find((n) => n.id === currentTab);
+            if (!navItem) return null;
+            return (
+              <div>
+                {navItem.eyebrow && (
+                  <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">{navItem.eyebrow}</span>
+                )}
+                <h1 className={`text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl ${navItem.eyebrow ? "mt-1" : ""}`}>
+                  {navItem.title || navItem.label}
+                </h1>
+                {navItem.subtitle && <p className="text-xs text-slate-500 mt-1.5">{navItem.subtitle}</p>}
+              </div>
+            );
+          })()}
         </div>
 
         {/* Diagnostic Results Display */}
