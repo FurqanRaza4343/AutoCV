@@ -1,10 +1,9 @@
 import React, { useState } from "react";
-import { 
-  UploadCloud, 
-  FileText, 
-  Database, 
-  RefreshCw, 
-  Layers
+import {
+  UploadCloud,
+  FileText,
+  Layers,
+  CheckCircle2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -13,8 +12,6 @@ interface StagedFile {
   name: string;
   size: string;
   type: string;
-  progress: number;
-  status: "uploading" | "completed" | "failed";
 }
 
 interface BulkUploadZoneProps {
@@ -30,9 +27,7 @@ const plural = (count: number, singular: string, pluralForm?: string): string =>
 
 export default function BulkUploadZone({ onFilesProcessed, onFilesSelected, showToast }: BulkUploadZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
-  const [uploadingFiles, setUploadingFiles] = useState<StagedFile[]>([]);
-  const [uploadProgressPercent, setUploadProgressPercent] = useState(0);
-  const [uploadingMessage, setUploadingMessage] = useState("");
+  const [stagedFiles, setStagedFiles] = useState<StagedFile[]>([]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -58,18 +53,15 @@ export default function BulkUploadZone({ onFilesProcessed, onFilesSelected, show
   };
 
   const handleIncomingFiles = (filesList: File[]) => {
-    const validExtensions = [".pdf", ".doc", ".docx", ".csv"];
+    const validExtensions = [".pdf", ".docx"];
     const filteredFiles = filesList.filter(file => {
       const name = file.name.toLowerCase();
       return validExtensions.some(ext => name.endsWith(ext));
     });
 
     if (filteredFiles.length === 0) {
-      if (showToast) {
-        showToast("No compatible files found. Please upload .pdf, .doc, .docx, or .csv documents.");
-      } else {
-        alert("No compatible files found. Please upload .pdf, .doc, .docx, or .csv documents.");
-      }
+      const message = "No compatible files found. Please upload .pdf or .docx resumes.";
+      if (showToast) showToast(message); else console.warn(message);
       return;
     }
 
@@ -78,8 +70,6 @@ export default function BulkUploadZone({ onFilesProcessed, onFilesSelected, show
       name: file.name,
       size: `${(file.size / 1024).toFixed(1)} KB`,
       type: file.name.split(".").pop()?.toUpperCase() || "PDF",
-      progress: 0,
-      status: "uploading" as const
     }));
 
     if (onFilesSelected) {
@@ -91,53 +81,15 @@ export default function BulkUploadZone({ onFilesProcessed, onFilesSelected, show
       })));
     }
 
-    setUploadingFiles(newStagedFiles);
-    simulateFileUploads(newStagedFiles);
-  };
-
-  const simulateFileUploads = (filesToUpload: StagedFile[]) => {
-    let currentCompleted = 0;
-    const total = filesToUpload.length;
-    setUploadingMessage(`Uploading 0 of ${plural(total, "file")}...`);
-
-    const interval = setInterval(() => {
-      setUploadingFiles(prev => {
-        let allCompleted = true;
-        const updated = prev.map(f => {
-          if (f.progress < 100) {
-            allCompleted = false;
-            const nextProgress = Math.min(100, f.progress + Math.floor(Math.random() * 25) + 15);
-            return { 
-              ...f, 
-              progress: nextProgress, 
-              status: nextProgress === 100 ? ("completed" as const) : ("uploading" as const) 
-            };
-          }
-          return f;
-        });
-
-        const completedCount = updated.filter(f => f.status === "completed").length;
-        setUploadingMessage(`Uploading ${completedCount} of ${plural(total, "file")}...`);
-        setUploadProgressPercent(Math.round((completedCount / total) * 100));
-
-        if (allCompleted) {
-          clearInterval(interval);
-          setTimeout(() => {
-            if (showToast) {
-              showToast(`Successfully uploaded & indexed ${plural(total, "resume")} into candidate pool!`);
-            }
-            if (onFilesProcessed) {
-              onFilesProcessed(total);
-            }
-            setUploadingFiles([]);
-            setUploadProgressPercent(0);
-            setUploadingMessage("");
-          }, 800);
-        }
-
-        return updated;
-      });
-    }, 300);
+    // Files are already in memory at this point - there's no real upload to animate
+    // progress toward yet. The actual upload happens when "Run AI Scoring" is clicked.
+    setStagedFiles(newStagedFiles);
+    if (showToast) {
+      showToast(`${plural(newStagedFiles.length, "file")} staged - click "Run Agentix AI Scoring" to upload & score.`);
+    }
+    if (onFilesProcessed) {
+      onFilesProcessed(newStagedFiles.length);
+    }
   };
 
   return (
@@ -147,13 +99,9 @@ export default function BulkUploadZone({ onFilesProcessed, onFilesSelected, show
         <div>
           <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
             <Layers className="h-4.5 w-4.5 text-indigo-600" />
-            Resume Ingestion Hub
+            Bulk Resume Upload
           </h3>
-          <p className="text-xs text-slate-500 mt-0.5">Ingest thousands of CV documents concurrently through automated folder listeners or manual batches.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="text-[10px] font-bold text-slate-400 font-mono">STATION-UPLINK ACTIVE</span>
+          <p className="text-xs text-slate-500 mt-0.5">Stage multiple CVs, then run AI scoring on all of them at once.</p>
         </div>
       </div>
 
@@ -176,17 +124,17 @@ export default function BulkUploadZone({ onFilesProcessed, onFilesSelected, show
             id="bulk-file-uploader-input"
             type="file"
             multiple
-            accept=".pdf,.doc,.docx,.csv"
+            accept=".pdf,.docx"
             onChange={handleFileSelect}
             className="hidden"
           />
-          
+
           <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 mb-3 border border-indigo-100">
             <UploadCloud className="h-5.5 w-5.5" />
           </div>
 
           <p className="text-xs font-bold text-slate-800">Drag &amp; drop resume files here, or browse</p>
-          <p className="text-[10px] text-slate-400 mt-1 max-w-xs">Supports PDF, DOC, DOCX, and CSV formats up to 15MB each.</p>
+          <p className="text-[10px] text-slate-400 mt-1 max-w-xs">Supports PDF and DOCX formats, up to 10MB each.</p>
 
           <div className="flex items-center gap-2 mt-4 flex-wrap justify-center">
             <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-[9px] font-bold text-slate-600 border border-slate-200/60">
@@ -197,58 +145,39 @@ export default function BulkUploadZone({ onFilesProcessed, onFilesSelected, show
               <FileText className="h-2.5 w-2.5 text-blue-500" />
               DOCX
             </span>
-            <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-[9px] font-bold text-slate-600 border border-slate-200/60">
-              <Database className="h-2.5 w-2.5 text-emerald-600" />
-              CSV
-            </span>
           </div>
         </div>
       </div>
 
-      {/* Upload Progress Bar (Simulated Uploading X of Y files...) */}
+      {/* Staged files - not yet uploaded. Upload happens when "Run AI Scoring" runs. */}
       <AnimatePresence>
-        {uploadingFiles.length > 0 && (
-          <motion.div 
+        {stagedFiles.length > 0 && (
+          <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             className="border-t border-slate-100 bg-slate-50/60 p-5 space-y-3"
           >
-            <div className="flex items-center justify-between text-xs font-semibold">
-              <div className="flex items-center gap-2 text-indigo-600">
-                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                <span>{uploadingMessage}</span>
+            <div className="flex items-center justify-between text-xs font-semibold text-emerald-600">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                <span>{plural(stagedFiles.length, "file")} staged - not yet uploaded</span>
               </div>
-              <span className="font-mono font-bold text-slate-700">{uploadProgressPercent}%</span>
             </div>
 
-            {/* Simulated Progress bar container */}
-            <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden border border-slate-300/40">
-              <motion.div 
-                className="h-full bg-indigo-600 rounded-full" 
-                animate={{ width: `${uploadProgressPercent}%` }}
-                transition={{ duration: 0.1 }}
-              />
-            </div>
-
-            {/* List of files being processed concurrently */}
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 mt-2">
-              {uploadingFiles.slice(0, 6).map((file) => (
+              {stagedFiles.slice(0, 6).map((file) => (
                 <div key={file.id} className="flex items-center justify-between p-2 rounded-lg border border-slate-200/50 bg-white text-[10px]">
                   <div className="flex items-center gap-2 truncate max-w-[80%]">
                     <FileText className="h-3 w-3 text-slate-400 shrink-0" />
                     <span className="font-semibold text-slate-700 truncate">{file.name}</span>
                   </div>
-                  {file.status === "completed" ? (
-                    <span className="text-emerald-600 font-bold">100%</span>
-                  ) : (
-                    <span className="text-slate-400 font-mono">{file.progress}%</span>
-                  )}
+                  <span className="text-slate-400 font-mono">{file.size}</span>
                 </div>
               ))}
-              {uploadingFiles.length > 6 && (
+              {stagedFiles.length > 6 && (
                 <div className="p-2 rounded-lg border border-dashed border-slate-200/80 bg-slate-100/30 text-[10px] text-slate-400 flex items-center justify-center font-medium">
-                  + {uploadingFiles.length - 6} more {uploadingFiles.length - 6 === 1 ? "document" : "documents"} processing
+                  + {stagedFiles.length - 6} more {stagedFiles.length - 6 === 1 ? "document" : "documents"} staged
                 </div>
               )}
             </div>

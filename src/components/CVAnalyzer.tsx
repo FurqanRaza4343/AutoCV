@@ -104,7 +104,7 @@ export default function CVAnalyzer({ onPipelineRun, showToast, jobDescription }:
           <div>
             <h3 className="text-base font-bold text-slate-900">CV Analysis Studio</h3>
             <p className="text-xs text-slate-500">
-              Upload 1-5 CV/resumes to extract data, get detailed assessment, and push to the 4-agent AI pipeline
+              Upload 1-5 real resume files (.pdf or .docx) to extract data, get a detailed AI assessment, and push to the 4-agent pipeline. Any real CV works - your own, a colleague's, or a sample resume - the AI reads the actual document text.
             </p>
           </div>
         </div>
@@ -126,7 +126,7 @@ export default function CVAnalyzer({ onPipelineRun, showToast, jobDescription }:
             ref={inputRef}
             type="file"
             multiple
-            accept=".pdf,.doc,.docx"
+            accept=".pdf,.docx"
             className="hidden"
             onChange={(e) => e.target.files && addFiles(e.target.files)}
           />
@@ -134,7 +134,7 @@ export default function CVAnalyzer({ onPipelineRun, showToast, jobDescription }:
           <p className="text-sm font-semibold text-slate-700">
             {files.length >= 5 ? "Max 5 CVs reached" : "Drop CVs here or click to browse"}
           </p>
-          <p className="text-xs text-slate-400 mt-1">Supports PDF, DOC, DOCX (up to 5 files)</p>
+          <p className="text-xs text-slate-400 mt-1">Supports PDF and DOCX (up to 5 files)</p>
         </div>
 
         <AnimatePresence>

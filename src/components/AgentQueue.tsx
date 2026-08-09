@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import type { QueueItem } from "../store/useAppStore";
+import ConfirmDialog from "./ConfirmDialog";
+import { scoreBadgeClass } from "../lib/scoreColor";
 
 export type QueueStage = "Awaiting Parsing" | "Awaiting Ranking" | "Ready for Outreach" | "Invite Sent";
 
@@ -23,6 +25,7 @@ interface AgentQueueProps {
   onAdvanceStage?: (candidateName: string) => void;
   onPushToPipeline?: (candidateIds: string[]) => void;
   onDeleteItem?: (candidateId: string) => void;
+  onViewDetails?: (candidateId: string) => void;
   refreshQueue?: () => void;
 }
 
@@ -37,9 +40,11 @@ const plural = (count: number, singular: string, pluralForm?: string): string =>
   return `${count} ${word}`;
 };
 
-export default function AgentQueue({ items, onTriggerToast, onAdvanceStage, onPushToPipeline, onDeleteItem, refreshQueue }: AgentQueueProps) {
+export default function AgentQueue({ items, onTriggerToast, onAdvanceStage, onPushToPipeline, onDeleteItem, onViewDetails, refreshQueue }: AgentQueueProps) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showBulkDropdown, setShowBulkDropdown] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
 
   const toggleSelect = (id: string) => {
     setSelectedIds(prev => 
@@ -104,8 +109,9 @@ export default function AgentQueue({ items, onTriggerToast, onAdvanceStage, onPu
         return "text-red-500 bg-red-50 border-red-100";
       case "DOCX":
         return "text-blue-500 bg-blue-50 border-blue-100";
-      case "CSV":
-        return "text-emerald-500 bg-emerald-50 border-emerald-100";
+      case "LEAD":
+        // Sourced lead with no real resume on file - never colored like a real file type.
+        return "text-sky-600 bg-sky-50 border-sky-100";
       default:
         return "text-slate-500 bg-slate-50 border-slate-100";
     }
@@ -119,9 +125,8 @@ export default function AgentQueue({ items, onTriggerToast, onAdvanceStage, onPu
         </span>
       );
     }
-    const colorClass = score >= 85 ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-blue-50 text-indigo-700 border-indigo-100";
     return (
-      <span className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-xs font-mono font-bold ${colorClass}`}>
+      <span className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-xs font-mono font-bold ${scoreBadgeClass(score)}`}>
         {score}%
       </span>
     );
@@ -294,7 +299,11 @@ export default function AgentQueue({ items, onTriggerToast, onAdvanceStage, onPu
                   </td>
 
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => onViewDetails?.(item.id)}
+                      className="flex items-center gap-3 text-left cursor-pointer rounded-lg -m-1 p-1 hover:bg-slate-50 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                      title="View full details"
+                    >
                       <div className="flex h-9 w-9 items-center justify-center rounded-full bg-indigo-100 border border-indigo-200 font-bold text-indigo-700 text-xs shrink-0">
                         {getInitials(item.candidateName)}
                       </div>
@@ -304,7 +313,7 @@ export default function AgentQueue({ items, onTriggerToast, onAdvanceStage, onPu
                         </div>
                         <div className="text-slate-400 text-[10px] mt-0.5">{item.stage} • {item.email}</div>
                       </div>
-                    </div>
+                    </button>
                   </td>
 
                   <td className="px-6 py-4 text-center whitespace-nowrap">
@@ -338,14 +347,8 @@ export default function AgentQueue({ items, onTriggerToast, onAdvanceStage, onPu
                       )}
                       {onDeleteItem && (
                         <button
-                          onClick={() => {
-                            if (confirm(`Remove ${item.candidateName} from queue?`)) {
-                              onDeleteItem(item.id);
-                              if (onTriggerToast) onTriggerToast(`Removed ${item.candidateName} from queue`);
-                              if (refreshQueue) setTimeout(refreshQueue, 1000);
-                            }
-                          }}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-slate-100 transition cursor-pointer"
+                          onClick={() => setDeleteTarget({ id: item.id, name: item.candidateName })}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-slate-100 transition cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500"
                           title="Remove from queue"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -373,14 +376,44 @@ export default function AgentQueue({ items, onTriggerToast, onAdvanceStage, onPu
           <span>{items.length} candidate(s) in queue. Data sourced from live pipeline.</span>
         </div>
         
-        <button 
-          onClick={() => alert("Processing queue shows candidates currently moving through the AI agent pipeline stages. Use 'Push Stage' to manually advance them.")}
-          className="text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1 cursor-pointer self-start sm:self-center"
-        >
-          <HelpCircle className="h-3 w-3" />
-          <span>Pipeline logic help</span>
-        </button>
+        <div className="relative self-start sm:self-center">
+          <button
+            onClick={() => setShowHelp((v) => !v)}
+            className="text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500 rounded"
+            aria-expanded={showHelp}
+          >
+            <HelpCircle className="h-3 w-3" />
+            <span>Pipeline logic help</span>
+          </button>
+          <AnimatePresence>
+            {showHelp && (
+              <motion.div
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 4 }}
+                className="absolute bottom-full right-0 mb-2 w-64 rounded-lg border border-slate-200 bg-white p-3 text-[11px] text-slate-600 shadow-lg z-10"
+              >
+                This queue shows candidates currently moving through the AI agent pipeline stages. Use "Push Stage" to manually advance a candidate to the next stage.
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </div>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="Remove from queue?"
+        message={deleteTarget ? `This will remove ${deleteTarget.name} from the queue.` : ""}
+        onConfirm={() => {
+          if (deleteTarget && onDeleteItem) {
+            onDeleteItem(deleteTarget.id);
+            if (onTriggerToast) onTriggerToast(`Removed ${deleteTarget.name} from queue`);
+            if (refreshQueue) setTimeout(refreshQueue, 1000);
+          }
+          setDeleteTarget(null);
+        }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

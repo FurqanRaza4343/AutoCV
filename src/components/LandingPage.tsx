@@ -1,16 +1,20 @@
 import React from "react";
 import { motion } from "framer-motion";
-import { 
-  ArrowRight, 
-  Cpu, 
-  CheckCircle2, 
-  Zap, 
+import {
+  ArrowRight,
+  Cpu,
+  CheckCircle2,
+  Zap,
   Terminal,
   Layers,
   DownloadCloud,
   FileText,
   Sparkles,
   ArrowUpRight,
+  BarChart3,
+  Mail,
+  ShieldCheck,
+  ListChecks,
 } from "lucide-react";
 import VideoHero from "./VideoHero";
 import { BackgroundPathsWrapper } from "./BackgroundPaths";
@@ -84,7 +88,7 @@ export default function LandingPage({ onLaunchDashboard }: LandingPageProps) {
 
             {/* Description */}
             <p className="text-slate-500 text-base sm:text-lg max-w-2xl mx-auto leading-relaxed">
-              Orchestrate secure, high-precision candidate processing workflows. Coordinate document ingestion, multi-stage assessment metrics, and outbound scheduler agents seamlessly within a single ecosystem.
+              Upload CVs or source LinkedIn leads, then let AI screen, rank, and recommend candidates against your job description - all in one place.
             </p>
 
             {/* CTA Buttons */}
@@ -98,13 +102,13 @@ export default function LandingPage({ onLaunchDashboard }: LandingPageProps) {
                 <ArrowRight className="h-4 w-4" />
               </button>
 
-              <button
-                onClick={() => alert("Enterprise sandbox configured. No external credentials required to evaluate core functions.")}
+              <a
+                href="#features"
                 className="border border-neutral-200 bg-white hover:bg-neutral-50 text-neutral-700 px-8 py-4 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 text-sm font-bold"
                 id="hero-explore-architecture-btn"
               >
-                <span>Explore Integrations</span>
-              </button>
+                <span>See What It Does</span>
+              </a>
             </div>
 
           </div>
@@ -125,7 +129,7 @@ export default function LandingPage({ onLaunchDashboard }: LandingPageProps) {
               The Agentix Orchestration Engine
             </h2>
             <p className="text-slate-500 text-sm sm:text-base leading-relaxed">
-              Four unified recruitment agent controllers operating on secure processing loops. Streamline parsing, customize experience thresholds, and trigger candidate communications automatically.
+              Four AI agents handle parsing, screening, ranking, and candidate communication - configurable to match your hiring criteria.
             </p>
           </div>
 
@@ -154,33 +158,29 @@ export default function LandingPage({ onLaunchDashboard }: LandingPageProps) {
                       <DownloadCloud className="h-6 w-6" />
                     </motion.div>
                     <div>
-                      <h3 className="text-lg font-bold text-slate-900">Omnichannel Fetcher</h3>
+                      <h3 className="text-lg font-bold text-slate-900">Candidate Sourcing</h3>
                       <p className="text-[10px] font-mono text-sky-600 font-semibold tracking-wider uppercase">FetcherBot Node</p>
                     </div>
                   </div>
                   <span className="text-[10px] font-bold text-slate-400 font-mono tracking-wider bg-slate-100 border border-slate-200/60 px-2 py-0.5 rounded">
-                    CHANNEL SYNC
+                    2 SOURCES
                   </span>
                 </div>
 
                 <p className="text-slate-500 text-xs sm:text-sm leading-relaxed max-w-xl">
-                  Monitors data feeds and file uploads continuously. Syncs incoming candidate resumes from Local Directory Sync, Bulk File Uploads, and API endpoints straight into candidate screening buffers.
+                  Bring your own CVs for a full AI screening, or let the fetcher bot source LinkedIn leads to expand your pipeline - each clearly labeled by confidence level.
                 </p>
               </div>
 
-              {/* Interactive representation of sources */}
-              <div className="mt-6 pt-6 border-t border-slate-150 grid grid-cols-1 sm:grid-cols-3 gap-3 relative z-10 text-xs">
+              {/* Real sources, honestly labeled */}
+              <div className="mt-6 pt-6 border-t border-slate-150 grid grid-cols-1 sm:grid-cols-2 gap-3 relative z-10 text-xs">
                 <div className="bg-slate-50/80 border border-slate-200/60 rounded-xl p-2.5 text-center">
-                  <div className="font-mono font-bold text-slate-800">LOCAL DIRECTORY SYNC</div>
-                  <div className="text-[9px] text-slate-400 mt-0.5">Connected</div>
+                  <div className="font-mono font-bold text-slate-800">CV UPLOAD</div>
+                  <div className="text-[9px] text-slate-400 mt-0.5">Full AI screening</div>
                 </div>
                 <div className="bg-slate-50/80 border border-slate-200/60 rounded-xl p-2.5 text-center">
-                  <div className="font-mono font-bold text-slate-800">BULK FILE UPLOAD</div>
-                  <div className="text-[9px] text-slate-400 mt-0.5">Index Active</div>
-                </div>
-                <div className="bg-slate-50/80 border border-slate-200/60 rounded-xl p-2.5 text-center">
-                  <div className="font-mono font-bold text-slate-800">API ENDPOINTS</div>
-                  <div className="text-[9px] text-slate-400 mt-0.5">Polling Active</div>
+                  <div className="font-mono font-bold text-slate-800">LINKEDIN SOURCING</div>
+                  <div className="text-[9px] text-slate-400 mt-0.5">Low-confidence leads</div>
                 </div>
               </div>
             </motion.div>
@@ -206,21 +206,21 @@ export default function LandingPage({ onLaunchDashboard }: LandingPageProps) {
                     <Terminal className="h-6 w-6" />
                   </motion.div>
                   <div>
-                    <h3 className="text-lg font-bold text-slate-900">JSON Parser</h3>
+                    <h3 className="text-lg font-bold text-slate-900">AI Resume Parsing</h3>
                     <p className="text-[10px] font-mono text-sky-600 font-semibold tracking-wider uppercase">ParserBot Node</p>
                   </div>
                 </div>
 
                 <p className="text-slate-500 text-xs sm:text-sm leading-relaxed">
-                  Text extraction controller converting raw documents into deeply structured JSON compliance records with lexical precision.
+                  Upload a real PDF or DOCX resume and Mistral AI extracts name, skills, experience, and location straight from the document text - no manual data entry.
                 </p>
               </div>
 
-              {/* Mock Output Schema Visualizer */}
+              {/* Real extracted-field example */}
               <div className="mt-6 bg-slate-50/80 border border-slate-200 rounded-xl p-3 font-mono text-[9px] text-sky-700 relative z-10 overflow-hidden">
                 <p className="text-slate-400">{"{"}</p>
-                <p className="pl-3"><span className="text-slate-800">"skills"</span>: ["React", "Typescript"],</p>
-                <p className="pl-3"><span className="text-slate-800">"parsedStatus"</span>: "Complete"</p>
+                <p className="pl-3"><span className="text-slate-800">"skills"</span>: ["React", "Node.js", "AWS"],</p>
+                <p className="pl-3"><span className="text-slate-800">"experience_years"</span>: 4</p>
                 <p className="text-slate-400">{"}"}</p>
               </div>
             </motion.div>
@@ -245,21 +245,21 @@ export default function LandingPage({ onLaunchDashboard }: LandingPageProps) {
                     <Cpu className="h-6 w-6" />
                   </motion.div>
                   <div>
-                    <h3 className="text-lg font-bold text-slate-900">Scoring Engine</h3>
+                    <h3 className="text-lg font-bold text-slate-900">Screening & Ranking</h3>
                     <p className="text-[10px] font-mono text-sky-600 font-semibold tracking-wider uppercase">RankerBot Node</p>
                   </div>
                 </div>
 
                 <p className="text-slate-500 text-xs sm:text-sm leading-relaxed">
-                  Applies standard multidimensional evaluation metrics. Matches candidate profiles to JD requirements computing clean experience compliance scores.
+                  Every candidate is scored 0-100 against your exact job description, ranked, and given a clear verdict - Recommend, Consider, or Do Not Recommend.
                 </p>
               </div>
 
               {/* Score Match bar indicator representation */}
               <div className="mt-6 bg-slate-50/80 border border-slate-200/60 rounded-xl p-4 relative z-10 space-y-3 text-xs">
                 <div className="flex items-center justify-between font-bold">
-                  <span className="text-slate-500 uppercase">Match Score Target</span>
-                  <span className="text-sky-600 font-mono">85% Minimum</span>
+                  <span className="text-slate-500 uppercase">Match Score</span>
+                  <span className="text-sky-600 font-mono">Recommend @ 88%</span>
                 </div>
                 <div className="h-2 w-full bg-slate-200/60 rounded-full overflow-hidden">
                   <div className="h-full bg-sky-600 rounded-full w-[88%]" />
@@ -288,28 +288,48 @@ export default function LandingPage({ onLaunchDashboard }: LandingPageProps) {
                       <Zap className="h-6 w-6" />
                     </motion.div>
                     <div>
-                      <h3 className="text-lg font-bold text-slate-900">Auto-Scheduler</h3>
+                      <h3 className="text-lg font-bold text-slate-900">Auto-Notify</h3>
                       <p className="text-[10px] font-mono text-sky-600 font-semibold tracking-wider uppercase">SchedulerBot Node</p>
                     </div>
                   </div>
                   <span className="text-[10px] font-bold text-slate-400 font-mono tracking-wider bg-slate-100 border border-slate-200/60 px-2 py-0.5 rounded">
-                    SMTP GATEWAY
+                    EMAIL
                   </span>
                 </div>
 
                 <p className="text-slate-500 text-xs sm:text-sm leading-relaxed max-w-xl">
-                  Automatically triggers personalized scheduling outreach loops when candidate threshold metrics are satisfied, aligning direct calendar availability.
+                  When a candidate clears your screening bar, Agentix can send them a personalized screening update and interview invite automatically - no manual follow-up needed.
                 </p>
               </div>
 
-              {/* Clean scheduler indicator */}
-              <div className="mt-6 pt-4 border-t border-slate-150 flex flex-wrap items-center gap-3 relative z-10 text-xs text-slate-500">
-                <span className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-1 rounded-lg font-semibold">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" /> Outbox Synced
-                </span>
-                <span>Coordinates schedule invites only after threshold satisfaction metrics clear.</span>
+              {/* Real pipeline stage labels this connects to */}
+              <div className="mt-6 pt-4 border-t border-slate-150 flex flex-wrap items-center gap-2 relative z-10 text-[10px]">
+                <span className="px-2.5 py-1 rounded-lg bg-slate-50/80 border border-slate-200/60 font-mono font-semibold text-slate-600">Applied</span>
+                <ArrowRight className="h-3 w-3 text-slate-300" />
+                <span className="px-2.5 py-1 rounded-lg bg-slate-50/80 border border-slate-200/60 font-mono font-semibold text-slate-600">Screening</span>
+                <ArrowRight className="h-3 w-3 text-slate-300" />
+                <span className="px-2.5 py-1 rounded-lg bg-slate-50/80 border border-slate-200/60 font-mono font-semibold text-slate-600">Interviewing</span>
+                <ArrowRight className="h-3 w-3 text-slate-300" />
+                <span className="px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 font-mono font-semibold text-emerald-700">Offered</span>
               </div>
             </motion.div>
+
+          </div>
+
+          {/* Additional real capabilities - lighter-weight strip below the main bento grid */}
+          <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { icon: BarChart3, label: "Analytics Dashboard", desc: "Live hiring funnel & skill trends" },
+              { icon: FileText, label: "Export Reports", desc: "TXT, XLSX, and PDF per candidate" },
+              { icon: ListChecks, label: "Status Pipeline", desc: "Track candidates stage by stage" },
+              { icon: ShieldCheck, label: "Private Workspace", desc: "Your candidate data, isolated per account" },
+            ].map(({ icon: Icon, label, desc }) => (
+              <div key={label} className="rounded-xl bg-white/70 border border-slate-200/80 backdrop-blur-md p-4 flex flex-col gap-2">
+                <Icon className="h-4 w-4 text-sky-600" />
+                <div className="text-xs font-bold text-slate-900">{label}</div>
+                <div className="text-[10px] text-slate-500 leading-snug">{desc}</div>
+              </div>
+            ))}
 
           </div>
 
@@ -323,13 +343,13 @@ export default function LandingPage({ onLaunchDashboard }: LandingPageProps) {
             <div className="relative z-10 max-w-2xl mx-auto space-y-6">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 border border-sky-200 px-3.5 py-1 text-xs font-semibold text-sky-700">
                 <Sparkles className="h-3.5 w-3.5 text-sky-500" />
-                SaaS Operational Framework
+                Free to Try
               </span>
               <h3 className="text-3xl sm:text-4xl font-black tracking-tight text-slate-900 leading-tight">
                 Ready to Automate Your Screening?
               </h3>
               <p className="text-slate-500 text-sm sm:text-base leading-relaxed">
-                Launch the core pipeline dashboard in seconds. Test custom resume parsing speeds, configure score ranking matrices, and experience autonomous developer recruitment flow.
+                Sign up, upload a few resumes or source LinkedIn leads, and watch the full AI pipeline - parsing, screening, ranking, and verdicts - run end-to-end in under a minute.
               </p>
 
               <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -348,13 +368,13 @@ export default function LandingPage({ onLaunchDashboard }: LandingPageProps) {
                   <ArrowRight className="h-4 w-4" />
                 </motion.button>
 
-                <button
-                  onClick={() => alert("Enterprise sandbox operates locally. No credentials or external secrets needed.")}
+                <a
+                  href="#features"
                   className="rounded-xl bg-white border border-slate-200 hover:bg-slate-50 px-6 py-3.5 text-sm font-bold text-slate-700 transition flex items-center justify-center gap-2 cursor-pointer shadow-sm"
                   id="cta-explore-integrations-btn"
                 >
-                  <span>Explore Integrations</span>
-                </button>
+                  <span>See What It Does</span>
+                </a>
               </div>
             </div>
           </div>
@@ -364,10 +384,10 @@ export default function LandingPage({ onLaunchDashboard }: LandingPageProps) {
         <footer className="relative z-10 w-full bg-white/80 border-t border-slate-200 backdrop-blur-md font-sans">
           <div className="max-w-7xl mx-auto px-6 sm:px-8 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] text-slate-400">
             <span>&copy; 2026 Agentix AI. All rights reserved.</span>
-            <div className="flex items-center gap-4">
-              <a href="#" onClick={(e) => { e.preventDefault(); alert("Privacy Policy"); }} className="hover:text-slate-500 transition">Privacy Policy</a>
-              <a href="#" onClick={(e) => { e.preventDefault(); alert("Terms of Service"); }} className="hover:text-slate-500 transition">Terms of Service</a>
-              <a href="#" onClick={(e) => { e.preventDefault(); alert("Status Hub"); }} className="hover:text-slate-500 transition">Status Hub</a>
+            <div className="flex items-center gap-3 text-slate-300">
+              <span className="cursor-not-allowed" title="Coming soon">Privacy Policy</span>
+              <span className="cursor-not-allowed" title="Coming soon">Terms of Service</span>
+              <span className="cursor-not-allowed" title="Coming soon">Status Hub</span>
             </div>
           </div>
         </footer>
