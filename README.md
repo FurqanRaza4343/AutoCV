@@ -5,13 +5,13 @@ An AI-powered HR recruitment platform with real-time candidate scoring, job boar
 ## Features
 
 - **AI Resume Scoring** — Upload CVs (.pdf/.docx), Mistral AI extracts name, skills, experience, gender, shift preference, age, and scores match against a job description
-- **Job Board Auto-Fetch** — Scrapes Rozee.pk (via Apify) and LinkedIn (via SerpAPI), fixes names with AI, auto-runs pipeline
-- **4-Agent AI Pipeline** — Parse → Screen → Deep Rank → Finalize (Mistral-powered)
+- **LinkedIn Lead Sourcing** — Finds public LinkedIn profiles via SerpAPI, sanitizes names, and gives headline-only leads a conservative "Low Confidence — No CV" score instead of a full verdict
+- **4-Agent AI Pipeline** — Parse → Screen → Deep Rank → Finalize (Mistral-powered), with a real per-candidate verdict and failed AI calls surfaced as "Needs Rescoring" rather than a fabricated score
 - **Vector Embeddings** — Job descriptions embedded via Mistral `mistral-embed` for semantic candidate search
 - **Candidate Enrichment** — Auto-extract gender, shift preference, age, remote preference, skills from CVs
 - **Auto-Email** — Sends screening results and interview invites to best-match candidates (SMTP)
 - **Background Scheduler** — Auto-fetches from job boards every 6 hours
-- **Leaderboard & Analytics** — Real AI-extracted skills distribution, real metrics (hours saved, pipeline scores)
+- **Analytics** — Real AI-extracted skills distribution, real metrics (hours saved, pipeline scores)
 - **Google OAuth** — Sign in with Google
 - **Export** — Pipeline results exportable as TXT, XLSX, PDF
 
@@ -24,7 +24,7 @@ An AI-powered HR recruitment platform with real-time candidate scoring, job boar
 | AI | Mistral AI (mistral-small-latest, mistral-embed) |
 | Database | PostgreSQL (InsForge) |
 | Hosting | Backend: Fly.io, Frontend: Vercel / InsForge Static |
-| Scraping | Apify (Rozee.pk), SerpAPI (LinkedIn) |
+| Sourcing | SerpAPI (LinkedIn lead search via Google) |
 
 ## Project Structure
 
@@ -36,7 +36,7 @@ An AI-powered HR recruitment platform with real-time candidate scoring, job boar
 │   │   ├── schemas.py      # Pydantic schemas
 │   │   ├── database.py     # DB connection
 │   │   ├── pipeline_agents.py  # 4-agent pipeline logic
-│   │   ├── apify_scraper.py    # Rozee.pk + LinkedIn scraping
+│   │   ├── apify_scraper.py    # LinkedIn lead search (SerpAPI)
 │   │   ├── email_service.py    # SMTP email sending
 │   │   ├── vectorizer.py       # Mistral embeddings + cosine similarity
 │   │   └── ...
@@ -128,7 +128,7 @@ Or deploy to InsForge Static hosting.
 | `/api/candidates` | GET | List all candidates |
 | `/api/candidates` | POST | Create candidate |
 | `/api/candidates/upload` | POST | Upload CV file for AI scoring |
-| `/api/candidates/fetch-from-boards` | POST | Fetch from Rozee.pk + LinkedIn |
+| `/api/candidates/fetch-from-boards` | POST | Fetch LinkedIn leads |
 | `/api/candidates/enrich` | POST | Retroactively enrich candidates missing gender/shift/age |
 | `/api/candidates/deduplicate` | POST | Remove name duplicates |
 | `/api/candidates/bulk` | DELETE | Delete all candidates |
