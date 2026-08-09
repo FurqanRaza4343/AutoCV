@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Terminal, User, ChevronDown, LogOut, Settings, Bell, Briefcase, Menu, X } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { NAV_ITEMS } from "../navConfig";
 
 // Custom SPA-compatible link wrapper
 const Link = ({ href, onClick, children, className, id, title }: {
@@ -42,13 +43,9 @@ export default function Navbar({ currentTab, setCurrentTab, user, onSignIn, onSi
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
 
-  const navItems = [
-    { id: "landing",    label: "Home" },
-    { id: "dashboard",  label: "Dashboard" },
-    { id: "agents",     label: "AI Agents" },
-    { id: "candidates", label: "Candidates" },
-    { id: "analytics",  label: "Analytics" },
-  ];
+  // "Home" is the marketing landing page, not part of the in-app flow, so it's kept
+  // separate from the shared NAV_ITEMS list that drives both this navbar and the sidebar.
+  const navItems = [{ id: "landing", label: "Home" }, ...NAV_ITEMS.map(({ id, label }) => ({ id, label }))];
 
   return (
     <>
