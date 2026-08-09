@@ -22,6 +22,9 @@ interface ResultsDashboardProps {
 function getVerdictColor(verdict: string | null) {
   if (!verdict) return "text-slate-400";
   const v = verdict.toLowerCase();
+  // A failed AI call must never look like a real "Do Not Recommend" rejection -
+  // it needs a visibly different (neutral, retry-able) treatment.
+  if (v.includes("needs rescoring")) return "text-slate-500 bg-slate-100 border-slate-300";
   if (v.includes("strongly recommend")) return "text-emerald-600 bg-emerald-50 border-emerald-200";
   if (v.includes("recommend")) return "text-blue-600 bg-blue-50 border-blue-200";
   if (v.includes("consider")) return "text-amber-600 bg-amber-50 border-amber-200";
@@ -57,8 +60,11 @@ export default function ResultsDashboard({ run, results, showToast }: ResultsDas
 
   const bestMatch = results.find((r) => r.is_best_match) || results[0];
   const sorted = [...results].sort((a, b) => (a.rank_position || 999) - (b.rank_position || 999));
-  const avgScore = results.length > 0
-    ? Math.round(results.reduce((s, r) => s + (r.ranked_score || r.screened_score || 0), 0) / results.length)
+  // Only average over candidates that were genuinely scored - a batch of failed AI
+  // calls (score = null) must not drag the average down to look like real low scores.
+  const scoredResults = results.filter((r) => r.ranked_score != null || r.screened_score != null);
+  const avgScore = scoredResults.length > 0
+    ? Math.round(scoredResults.reduce((s, r) => s + (r.ranked_score ?? r.screened_score ?? 0), 0) / scoredResults.length)
     : 0;
   const topScore = bestMatch?.ranked_score || bestMatch?.screened_score || 0;
   const highMatchCount = results.filter((r) => (r.ranked_score || r.screened_score || 0) >= 80).length;
