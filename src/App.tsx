@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { useAppStore, CandidateStatus, QueueStage } from "./store/useAppStore";
+import { useAppStore, CandidateStatus, QueueStage, Candidate } from "./store/useAppStore";
 import { useAuthStore } from "./store/useAuthStore";
 import { api } from "./api";
 import { 
@@ -18,8 +18,13 @@ import FetchFilters, { FiltersState } from "./components/FetchFilters";
 import PipelineRunner from "./components/PipelineRunner";
 import ResultsDashboard from "./components/ResultsDashboard";
 import CVAnalyzer from "./components/CVAnalyzer";
+import ConfirmDialog from "./components/ConfirmDialog";
+import ScorecardModal from "./components/ScorecardModal";
+import CandidateDetailModal from "./components/CandidateDetailModal";
 import { CandidateDTO } from "./api";
 import { NAV_ITEMS } from "./navConfig";
+import { scoreBadgeClass } from "./lib/scoreColor";
+import { platformDotClass, platformBadgeClass } from "./lib/platformBadge";
 
 // Define TypeScript interfaces for our application state
 interface AIAgent {
@@ -108,6 +113,7 @@ export default function App() {
   const prependCandidates = useAppStore((s) => s.prependCandidates);
   const updateCandidateScore = useAppStore((s) => s.updateCandidateScore);
   const setCandidateStage = useAppStore((s) => s.setCandidateStage);
+  const setCandidateStatus = useAppStore((s) => s.setCandidateStatus);
   const advanceCandidateStage = useAppStore((s) => s.advanceCandidateStage);
   const screenCandidate = useAppStore((s) => s.screenCandidate);
   const updateAgentConfig = useAppStore((s) => s.updateAgentConfig);
@@ -184,6 +190,12 @@ export default function App() {
 
   // Mobile sidebar toggle
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  // In-app replacements for window.confirm()/alert()
+  const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
+  const [scorecardCandidate, setScorecardCandidate] = useState<{ name: string; matchScore: number | null; summary: string | undefined } | null>(null);
+  const [detailCandidate, setDetailCandidate] = useState<Candidate | null>(null);
+  const [screeningIds, setScreeningIds] = useState<Set<string>>(new Set());
 
   // Search & Filter state for candidates tab
   const [searchQuery, setSearchQuery] = useState("");
@@ -287,13 +299,13 @@ Required Skills:
     setIsFetchingFromBoards(true);
     setFetchedCandidates([]);
     setFetchMessage("Starting...");
-    showToast("Searching job boards for real candidates...");
+    showToast("Searching LinkedIn for candidate leads...");
     try {
       const f = boardFilters;
       const result = await api.fetchCandidates.fromBoards({
         job_title: jobDescription.split("\n")[0].slice(0, 60),
         job_description: jobDescription,
-        max_results_per_source: 15,
+        max_results_per_source: 20,
         filters: {
           gender: f.gender || undefined,
           shift: f.shift || undefined,
@@ -571,46 +583,59 @@ Required Skills:
 
   // Handles AI Resume Screening via real Mistral API
   const triggerAIScreen = async (candidateId: string) => {
-    setCandidateStage(candidateId, "Awaiting Ranking");
-
-    showToast("Agentix AI: ScreenerX is parsing resume & analyzing match compatibility...");
+    setScreeningIds((prev) => new Set(prev).add(candidateId));
+    showToast("Agentix AI is parsing the resume & analyzing match compatibility...");
 
     try {
       await screenCandidate(candidateId, jobDescription);
-      const updated = candidates.find(c => c.id === candidateId);
-      showToast(`Screening complete for ${updated?.name || 'candidate'}. Score: ${updated?.matchScore || 'N/A'}%`);
-    } catch (e) {
-      showToast(`Screening failed: ${e}`);
+      const updated = useAppStore.getState().candidates.find(c => c.id === candidateId);
+      showToast(`Screening complete for ${updated?.name || 'candidate'}. Score: ${updated?.matchScore ?? 'N/A'}%`);
+    } catch (e: any) {
+      const message = e?.message || String(e);
+      if (message.toLowerCase().includes("no cv on file")) {
+        showToast(`${useAppStore.getState().candidates.find(c => c.id === candidateId)?.name || 'This candidate'} has no CV on file - it's a sourced lead, not a fully screened candidate.`);
+      } else {
+        showToast(`Screening failed: ${message}`);
+      }
+    } finally {
+      setScreeningIds((prev) => {
+        const next = new Set(prev);
+        next.delete(candidateId);
+        return next;
+      });
     }
   };
 
   // Handles Adding Candidate
-  const handleAddCandidateSubmit = (e: React.FormEvent) => {
+  const handleAddCandidateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCandName || !newCandRole || !newCandEmail) {
-      alert("Please fill in all required fields.");
+      showToast("Please fill in all required fields.");
       return;
     }
 
-    addCandidate({
-      id: Date.now().toString(),
-      name: newCandName,
-      role: newCandRole,
-      department: newCandDept,
-      status: "Applied",
-      matchScore: null,
-      appliedDate: new Date().toISOString().split('T')[0],
-      email: newCandEmail,
-      currentStage: "Awaiting Parsing",
-    });
-    setIsAddCandidateOpen(false);
-    
-    // Reset fields
-    setNewCandName("");
-    setNewCandRole("");
-    setNewCandEmail("");
-    
-    showToast(`Successfully added ${newCandName} to recruitment pipeline.`);
+    try {
+      await addCandidate({
+        id: Date.now().toString(),
+        name: newCandName,
+        role: newCandRole,
+        department: newCandDept,
+        status: "Applied",
+        matchScore: null,
+        appliedDate: new Date().toISOString().split('T')[0],
+        email: newCandEmail,
+        currentStage: "Awaiting Parsing",
+      });
+      setIsAddCandidateOpen(false);
+      showToast(`Added ${newCandName}. Upload a CV for them to enable AI screening.`);
+
+      // Reset fields
+      setNewCandName("");
+      setNewCandRole("");
+      setNewCandEmail("");
+    } catch (e: any) {
+      showToast(`Failed to add candidate: ${e.message || e}`);
+    }
   };
 
   // Handles Agent Configuration edits (persists to backend)
@@ -816,7 +841,7 @@ Required Skills:
                         {isJdSaved ? (
                           <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100">
                             <Check className="h-3.5 w-3.5" />
-                            <span>Saved & Vectorized</span>
+                            <span>Saved</span>
                           </span>
                         ) : (
                           <span className="text-xs text-amber-500 font-medium bg-amber-50 px-2.5 py-1 rounded-full border border-amber-100">
@@ -952,22 +977,19 @@ Required Skills:
                         <svg className="h-4 w-4 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
-                        Real Candidates from Job Boards
+                        Candidates Found
                         <span className="text-xs font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
                           {fetchedCandidates.length} found
                         </span>
                         <span className="text-[10px] text-slate-400 font-mono">({fetchTimeMs}ms)</span>
                       </h3>
                       <div className="flex items-center gap-3 text-[10px] text-slate-500">
-                        {Object.entries(fetchPlatformBreakdown).filter(([_, count]) => count > 0).map(([platform, count]) => {
-                          const color = platform.includes("Rozee") ? "bg-emerald-500" : platform.includes("LinkedIn") ? "bg-blue-500" : "bg-purple-500"
-                          return (
-                            <span key={platform} className="flex items-center gap-1">
-                              <span className={`inline-block w-2 h-2 rounded-full ${color}`} />
-                              {platform}: {count}
-                            </span>
-                          )
-                        })}
+                        {Object.entries(fetchPlatformBreakdown).filter(([_, count]) => count > 0).map(([platform, count]) => (
+                          <span key={platform} className="flex items-center gap-1">
+                            <span className={`inline-block w-2 h-2 rounded-full ${platformDotClass(platform)}`} />
+                            {platform}: {count}
+                          </span>
+                        ))}
                       </div>
                     </div>
                     <div className="overflow-x-auto">
@@ -998,11 +1020,7 @@ Required Skills:
                               </td>
                               <td className="px-4 py-2.5 text-center">
                                 {c.match_score ? (
-                                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                    c.match_score >= 80 ? "bg-emerald-50 text-emerald-700" :
-                                    c.match_score >= 60 ? "bg-amber-50 text-amber-700" :
-                                    "bg-rose-50 text-rose-700"
-                                  }`}>
+                                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${scoreBadgeClass(c.match_score)}`}>
                                     {c.match_score}%
                                   </span>
                                 ) : (
@@ -1010,8 +1028,8 @@ Required Skills:
                                 )}
                               </td>
                               <td className="px-4 py-2.5 text-center">
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700">
-                                  {c.source_platform || "Rozee.pk"}
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${platformBadgeClass(c.source_platform || "")}`}>
+                                  {c.source_platform || "Unknown Source"}
                                 </span>
                               </td>
                               <td className="px-4 py-2.5 text-center text-slate-600">{c.gender || "-"}</td>
@@ -1050,9 +1068,9 @@ Required Skills:
                             style={{ width: `${scoringProgress}%` }}
                           />
                         </div>
-                        <div className="text-[10px] text-slate-400 font-mono flex items-center justify-between">
-                          <span>[STAGE] Parsing resumes into structured AST formats</span>
-                          <span>ScreenerX v2.4 (Active)</span>
+                        <div className="text-[10px] text-slate-500 font-mono flex items-center justify-between">
+                          <span>Extracting structured data from resumes</span>
+                          <span>Agentix AI</span>
                         </div>
                       </div>
 
@@ -1088,11 +1106,11 @@ Required Skills:
                         <div className="flex items-start gap-2 bg-slate-50 border border-slate-100 p-2.5 rounded-xl sm:max-w-xs shrink-0">
                           <AlertCircle className="h-4 w-4 text-slate-400 shrink-0 mt-0.5" />
                           <p className="text-[10px] text-slate-500 leading-normal font-medium">
-                            {!isJdSaved && (stagedCvs.length === 0 && files.length === 0) 
-                              ? "Save the Job Description on the left and stage CVs on the right to start scoring." 
-                              : !isJdSaved 
-                              ? "Click 'Save Job Description' first to initialize suitability evaluation weights." 
-                              : "Stage at least 1 candidate resume PDF to trigger the ScreenerX model."}
+                            {!isJdSaved && (stagedCvs.length === 0 && files.length === 0)
+                              ? "Save the Job Description on the left and stage CVs on the right to start scoring."
+                              : !isJdSaved
+                              ? "Click 'Save Job Description' first so scoring has a role to compare candidates against."
+                              : "Stage at least 1 candidate resume PDF to run AI scoring."}
                           </p>
                         </div>
                       )}
@@ -1105,6 +1123,10 @@ Required Skills:
                   <AgentQueue
                     items={queueItems}
                     onTriggerToast={showToast}
+                    onViewDetails={(id) => {
+                      const match = candidates.find((c) => c.id === id);
+                      if (match) setDetailCandidate(match);
+                    }}
                     onAdvanceStage={(name) => {
                       const match = candidates.find(c => c.name === name);
                       if (match) advanceCandidateStage(match.id);
@@ -1219,32 +1241,43 @@ Required Skills:
                       onClick={async () => {
                         try {
                           const result = await api.candidates.enrichAll();
-                          showToast(`Enriched ${result.enriched} candidates (scanned ${result.scanned})`);
+                          if (result.scanned === 0) {
+                            showToast("No candidates need enrichment - only candidates with a real CV on file and missing demographic data are eligible.");
+                          } else if (result.enriched === 0) {
+                            showToast(`Scanned ${result.scanned} candidate(s) with a CV on file, but AI enrichment didn't return new data for any of them.`);
+                          } else {
+                            showToast(`Enriched ${result.enriched} of ${result.scanned} eligible candidates.`);
+                          }
                           await useAppStore.getState().fetchCandidates();
                         } catch (e: any) {
                           showToast(`Enrich failed: ${e.message || e}`);
                         }
                       }}
-                      className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 transition focus:outline-none"
+                      className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-500"
                       id="enrich-candidates-btn"
+                      title="Only candidates with a real CV on file and missing demographic fields (gender, shift preference, etc.) are eligible"
                     >
                       <Sparkles className="h-4 w-4" />
                       <span>Enrich All</span>
                     </button>
                     {selectedIds.size > 0 && (
                       <button
-                        onClick={async () => {
-                          if (!confirm(`Delete ${selectedIds.size} selected candidates?`)) return;
-                          try {
-                            await api.candidates.deleteSelected(Array.from(selectedIds));
-                            showToast(`Deleted ${selectedIds.size} candidates`);
-                            setSelectedIds(new Set());
-                            await useAppStore.getState().fetchCandidates();
-                          } catch (e: any) {
-                            showToast(`Delete failed: ${e.message || e}`);
-                          }
-                        }}
-                        className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 transition focus:outline-none"
+                        onClick={() => setConfirmDialog({
+                          title: "Delete selected candidates?",
+                          message: `This will permanently delete ${selectedIds.size} selected candidate(s) and their results.`,
+                          onConfirm: async () => {
+                            setConfirmDialog(null);
+                            try {
+                              await api.candidates.deleteSelected(Array.from(selectedIds));
+                              showToast(`Deleted ${selectedIds.size} candidates`);
+                              setSelectedIds(new Set());
+                              await useAppStore.getState().fetchCandidates();
+                            } catch (e: any) {
+                              showToast(`Delete failed: ${e.message || e}`);
+                            }
+                          },
+                        })}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500"
                         id="delete-selected-btn"
                       >
                         <Trash2 className="h-4 w-4" />
@@ -1253,18 +1286,22 @@ Required Skills:
                     )}
                     {candidates.length > 0 && (
                       <button
-                        onClick={async () => {
-                          if (!confirm(`Delete all ${candidates.length} candidates and results? This cannot be undone.`)) return;
-                          try {
-                            await api.candidates.deleteAll();
-                            setSelectedIds(new Set());
-                            showToast(`Deleted all ${candidates.length} candidates`);
-                            await useAppStore.getState().fetchCandidates();
-                          } catch (e: any) {
-                            showToast(`Delete failed: ${e.message || e}`);
-                          }
-                        }}
-                        className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 transition focus:outline-none"
+                        onClick={() => setConfirmDialog({
+                          title: "Delete all candidates?",
+                          message: `This will permanently delete all ${candidates.length} candidates and results. This cannot be undone.`,
+                          onConfirm: async () => {
+                            setConfirmDialog(null);
+                            try {
+                              await api.candidates.deleteAll();
+                              setSelectedIds(new Set());
+                              showToast(`Deleted all ${candidates.length} candidates`);
+                              await useAppStore.getState().fetchCandidates();
+                            } catch (e: any) {
+                              showToast(`Delete failed: ${e.message || e}`);
+                            }
+                          },
+                        })}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500"
                         id="delete-all-candidates-btn"
                       >
                         <Trash2 className="h-4 w-4" />
@@ -1356,15 +1393,19 @@ Required Skills:
                                 />
                               </td>
                               <td className="whitespace-nowrap px-6 py-4.5">
-                                <div className="flex items-center gap-3">
-                                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 border border-slate-200 font-bold text-slate-800">
+                                <button
+                                  onClick={() => setDetailCandidate(cand)}
+                                  className="flex items-center gap-3 text-left cursor-pointer rounded-lg -m-1 p-1 hover:bg-slate-50 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                                  title="View full details"
+                                >
+                                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 border border-slate-200 font-bold text-slate-800">
                                     {cand.name.split(" ").map(n => n[0]).join("")}
                                   </div>
-                                  <div>
+                                  <div className="min-w-0">
                                     <div className="font-semibold text-slate-900">{cand.name}</div>
-                                    <div className="text-slate-400 mt-0.5">{cand.email}</div>
+                                    <div className="text-slate-500 mt-0.5 truncate">{cand.email}</div>
                                   </div>
-                                </div>
+                                </button>
                               </td>
 
                               <td className="whitespace-nowrap px-6 py-4.5">
@@ -1408,26 +1449,43 @@ Required Skills:
                               </td>
 
                               <td className="whitespace-nowrap px-6 py-4.5">
-                                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                                  cand.status === "Applied" 
-                                    ? "bg-slate-100 text-slate-800" 
-                                    : cand.status === "Screening"
-                                    ? "bg-sky-50 text-sky-700 border-sky-100"
-                                    : cand.status === "Interviewing"
-                                    ? "bg-indigo-50 text-indigo-700 border-indigo-100"
-                                    : cand.status === "Offered"
-                                    ? "bg-emerald-50 text-emerald-700 border-emerald-100"
-                                    : "bg-rose-50 text-rose-700 border-rose-100"
-                                }`}>
-                                  {cand.status}
-                                </span>
+                                <select
+                                  value={cand.status}
+                                  onChange={async (e) => {
+                                    const next = e.target.value as CandidateStatus;
+                                    try {
+                                      await setCandidateStatus(cand.id, next);
+                                      showToast(`Moved ${cand.name} to ${next}`);
+                                    } catch (err: any) {
+                                      showToast(`Failed to update status: ${err.message || err}`);
+                                    }
+                                  }}
+                                  className={`rounded-full px-2 py-0.5 text-[11px] font-semibold border cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500 ${
+                                    cand.status === "Applied"
+                                      ? "bg-slate-100 text-slate-800 border-slate-200"
+                                      : cand.status === "Screening"
+                                      ? "bg-sky-50 text-sky-700 border-sky-100"
+                                      : cand.status === "Interviewing"
+                                      ? "bg-indigo-50 text-indigo-700 border-indigo-100"
+                                      : cand.status === "Offered"
+                                      ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+                                      : "bg-rose-50 text-rose-700 border-rose-100"
+                                  }`}
+                                  title="Change status"
+                                >
+                                  <option value="Applied">Applied</option>
+                                  <option value="Screening">Screening</option>
+                                  <option value="Interviewing">Interviewing</option>
+                                  <option value="Offered">Offered</option>
+                                  <option value="Rejected">Rejected</option>
+                                </select>
                               </td>
 
                               <td className="whitespace-nowrap px-6 py-4.5 text-right font-medium">
                                 <div className="flex items-center justify-end gap-2">
                                   {cand.matchScore === null && (
                                     <>
-                                      {cand.currentStage === "Awaiting Ranking" ? (
+                                      {screeningIds.has(cand.id) ? (
                                         <div className="inline-flex items-center gap-1.5 text-indigo-600 font-semibold px-3 py-1.5 bg-indigo-50/50 rounded-lg border border-indigo-100">
                                           <RefreshCw className="h-3 w-3 animate-spin" />
                                           <span>Scanning...</span>
@@ -1435,7 +1493,7 @@ Required Skills:
                                       ) : (
                                         <button
                                           onClick={() => triggerAIScreen(cand.id)}
-                                          className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 font-semibold text-indigo-700 hover:bg-indigo-100/60 transition focus:outline-none"
+                                          className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 font-semibold text-indigo-700 hover:bg-indigo-100/60 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
                                         >
                                           <Sparkles className="h-3.5 w-3.5 text-indigo-600" />
                                           <span>AI Screen</span>
@@ -1446,8 +1504,8 @@ Required Skills:
 
                                   {cand.matchScore !== null && (
                                     <button
-                                      onClick={() => alert(`ScreenerX Scorecard Analysis:\nCandidate: ${cand.name}\n\nMatching Score: ${cand.matchScore}%\n\nResume Summary: ${cand.summary || 'Matches ideal workforce parameters.'}`)}
-                                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-semibold text-slate-700 hover:bg-slate-50 transition focus:outline-none"
+                                      onClick={() => setScorecardCandidate({ name: cand.name, matchScore: cand.matchScore, summary: cand.summary })}
+                                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-semibold text-slate-700 hover:bg-slate-50 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
                                     >
                                       <Eye className="h-3.5 w-3.5 text-slate-500" />
                                       <span>View Scorecard</span>
@@ -1455,13 +1513,16 @@ Required Skills:
                                   )}
 
                                   <button
-                                    onClick={() => {
-                                      if (confirm(`Remove ${cand.name} from pipeline?`)) {
+                                    onClick={() => setConfirmDialog({
+                                      title: "Remove candidate?",
+                                      message: `This will remove ${cand.name} from the pipeline.`,
+                                      onConfirm: () => {
+                                        setConfirmDialog(null);
                                         removeCandidate(cand.id);
                                         showToast(`Removed candidate ${cand.name}.`);
-                                      }
-                                    }}
-                                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-slate-100 transition focus:outline-none"
+                                      },
+                                    })}
+                                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-slate-100 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500"
                                     title="Delete candidate"
                                   >
                                     <Trash2 className="h-4 w-4" />
@@ -1475,8 +1536,17 @@ Required Skills:
                             <td colSpan={12} className="px-6 py-8 md:py-12 text-center text-slate-500">
                               <div className="flex flex-col items-center justify-center">
                                 <Search className="h-8 w-8 text-slate-300 mb-2" />
-                                <p className="text-sm font-semibold text-slate-700">No candidates found</p>
-                                <p className="text-xs text-slate-400 mt-1">Try adjusting your search queries or filter categories.</p>
+                                {candidates.length === 0 ? (
+                                  <>
+                                    <p className="text-sm font-semibold text-slate-700">No candidates yet</p>
+                                    <p className="text-xs text-slate-400 mt-1">Upload a CV or fetch LinkedIn leads from the Dashboard to get started.</p>
+                                  </>
+                                ) : (
+                                  <>
+                                    <p className="text-sm font-semibold text-slate-700">No candidates found</p>
+                                    <p className="text-xs text-slate-400 mt-1">Try adjusting your search query or filter.</p>
+                                  </>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -1543,7 +1613,7 @@ Required Skills:
                       )}
                       {pipelineRuns.length === 0 && (
                         <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm flex flex-col items-center justify-center text-center h-full">
-                          <div className="text-4xl mb-3">AI</div>
+                          <Bot className="h-12 w-12 text-slate-300 mb-3" />
                           <h3 className="text-sm font-bold text-slate-700">Run the Pipeline</h3>
                           <p className="text-xs text-slate-400 mt-1 max-w-xs">
                             Select candidates and a job description on the Dashboard tab, then run the 4-agent pipeline here.
@@ -1832,6 +1902,27 @@ Required Skills:
       {showAuth && (
         <AuthModal onClose={() => { setShowAuth(false); handleAuthSuccess(); }} />
       )}
+
+      {/* Shared confirm dialog - replaces window.confirm() throughout this file */}
+      <ConfirmDialog
+        open={!!confirmDialog}
+        title={confirmDialog?.title || ""}
+        message={confirmDialog?.message || ""}
+        onConfirm={() => confirmDialog?.onConfirm()}
+        onCancel={() => setConfirmDialog(null)}
+      />
+
+      {/* Scorecard modal - replaces the old alert()-based "View Scorecard" popup */}
+      <ScorecardModal
+        open={!!scorecardCandidate}
+        name={scorecardCandidate?.name || ""}
+        matchScore={scorecardCandidate?.matchScore ?? null}
+        summary={scorecardCandidate?.summary ?? null}
+        onClose={() => setScorecardCandidate(null)}
+      />
+
+      {/* Candidate detail modal - opened by clicking a candidate row in the Candidates tab */}
+      <CandidateDetailModal candidate={detailCandidate} onClose={() => setDetailCandidate(null)} />
 
       {/* Floating Global Micro Notification System */}
       <AnimatePresence>

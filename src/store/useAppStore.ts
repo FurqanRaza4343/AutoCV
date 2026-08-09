@@ -47,7 +47,7 @@ export interface QueueItem {
   id: string;
   candidateName: string;
   email: string;
-  fileName: string;
+  fileName: string | null;
   fileType: string;
   stage: string;
   score: number | null;
@@ -84,6 +84,7 @@ interface AppState {
   prependCandidates: (candidates: Candidate[]) => void;
   updateCandidateScore: (id: string, matchScore: number, summary: string) => Promise<void>;
   setCandidateStage: (id: string, stage: QueueStage) => Promise<void>;
+  setCandidateStatus: (id: string, status: CandidateStatus) => Promise<void>;
   advanceCandidateStage: (id: string) => Promise<void>;
   screenCandidate: (id: string, jobDescription: string) => Promise<void>;
   toggleAgent: (id: string) => Promise<void>;
@@ -244,6 +245,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((state) => ({ candidates: [toCandidate(dto), ...state.candidates] }));
     } catch (e) {
       console.error("addCandidate failed", e);
+      throw e;
     }
   },
 
@@ -286,6 +288,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  setCandidateStatus: async (id, status) => {
+    try {
+      await api.candidates.updateStatus(id, status);
+      set((state) => ({
+        candidates: state.candidates.map((c) =>
+          c.id === id ? { ...c, status } : c,
+        ),
+      }));
+    } catch (e) {
+      console.error("setCandidateStatus failed", e);
+      throw e;
+    }
+  },
+
   advanceCandidateStage: async (id) => {
     const c = get().candidates.find((c) => c.id === id);
     if (!c) return;
@@ -317,6 +333,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }));
     } catch (e) {
       console.error("screenCandidate failed", e);
+      throw e;
     }
   },
 

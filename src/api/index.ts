@@ -88,7 +88,7 @@ export interface QueueItemDTO {
   id: string;
   candidate_name: string;
   email: string;
-  file_name: string;
+  file_name: string | null;
   file_type: string;
   stage: string;
   score: number | null;
