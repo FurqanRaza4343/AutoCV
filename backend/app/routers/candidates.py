@@ -19,6 +19,7 @@ from ..apify_scraper import (
     normalize_serp_to_candidate,
 )
 from ..pipeline_agents import _call_mistral_safe
+from .auth import get_current_user
 
 router = APIRouter(prefix="/candidates", tags=["candidates"])
 
@@ -59,6 +60,13 @@ def clean_name(raw: str) -> str:
         parts = cleaned.split()
         cleaned = ' '.join(parts[:3])
     return cleaned.strip()[:100] or "Unknown"
+
+
+def has_real_cv(cv_text: str | None) -> bool:
+    """A lead sourced from LinkedIn/SERP has no resume - its cv_text is a JSON
+    dump of the search snippet (see normalize_serp_to_candidate), not prose.
+    Only prose should ever be run through the full CV-scoring prompt."""
+    return bool(cv_text) and not cv_text.strip().startswith("{")
 
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
@@ -213,7 +221,7 @@ def auto_email_best_candidates(db: Session):
 
 # ── Background fetch with parallel Mistral scoring ────────────────────────
 
-def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
+def _run_fetch_background(job_id: str, payload: schemas.FetchRequest, user_id: str):
     """Run the full fetch+scoring in background, updating _fetch_jobs dict."""
     db = SessionLocal()
     start_time = time.time()
@@ -297,8 +305,11 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
 
         with ThreadPoolExecutor(max_workers=8) as pool:
             futures = [pool.submit(score_one, i, cand) for i, cand in enumerate(all_candidates)]
-            for f in as_completed(futures):
-                idx, cand = f.result()
+            # Named "future" (not "f") - "f" is payload.filters, used right after this
+            # loop; Python for-loop variables leak into the enclosing scope, so reusing
+            # "f" here silently shadowed the filters object and crashed the filter step.
+            for future in as_completed(futures):
+                idx, cand = future.result()
                 scored[idx] = cand
                 done_count += 1
                 pct = 20 + int(done_count / total * 50)
@@ -324,6 +335,7 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
         saved = []
         for cand in filtered:
             candidate = models.Candidate(
+                user_id=user_id,
                 name=cand.get("name", "Unknown")[:100],
                 email=cand.get("email", "unknown@example.com")[:200],
                 role=cand.get("role", "Professional")[:100],
@@ -348,7 +360,10 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
         db.commit()
         # Refresh to get IDs
         for cand in filtered:
-            saved_candidate = db.query(models.Candidate).filter(models.Candidate.email == cand.get("email", "")).order_by(models.Candidate.created_at.desc()).first()
+            saved_candidate = db.query(models.Candidate).filter(
+                models.Candidate.email == cand.get("email", ""),
+                models.Candidate.user_id == user_id,
+            ).order_by(models.Candidate.created_at.desc()).first()
             if saved_candidate:
                 saved.append(saved_candidate)
 
@@ -361,7 +376,7 @@ def _run_fetch_background(job_id: str, payload: schemas.FetchRequest):
             if cids:
                 auto_run_id = str(uuid.uuid4())
                 auto_run = models.PipelineRun(
-                    id=auto_run_id, job_title=payload.job_title or "Auto Pipeline",
+                    id=auto_run_id, user_id=user_id, job_title=payload.job_title or "Auto Pipeline",
                     job_description=payload.job_description, status="running",
                     created_at=datetime.now().astimezone(),
                 )
@@ -400,6 +415,7 @@ async def batch_analyze_cvs(
     files: list[UploadFile] = File(...),
     job_description: str = Form(""),
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     if len(files) > 5:
         raise HTTPException(400, "Maximum 5 CV files allowed at once")
@@ -476,6 +492,7 @@ Respond with ONLY valid JSON in this exact structure:
 
         # Save to DB so candidate has an ID for pipeline
         candidate = models.Candidate(
+            user_id=current_user.id,
             name=data.get("name", file.filename or "Unknown")[:100],
             email=data.get("email", "")[:200],
             role=data.get("role", "Professional")[:100],
@@ -522,13 +539,13 @@ Respond with ONLY valid JSON in this exact structure:
 
 
 @router.post("/fetch-from-boards")
-def fetch_from_job_boards(payload: schemas.FetchRequest):
+def fetch_from_job_boards(payload: schemas.FetchRequest, current_user: models.User = Depends(get_current_user)):
     """Start a background fetch and return immediately with a fetch_id for polling."""
     job_id = str(uuid.uuid4())
     _cleanup_stale_fetch_jobs()
     _update_fetch_job(job_id, status="processing", progress=0, message="Starting...", candidates=[], total_fetched=0, platform_breakdown={}, fetch_time_ms=0)
 
-    t = threading.Thread(target=_run_fetch_background, args=(job_id, payload), daemon=True)
+    t = threading.Thread(target=_run_fetch_background, args=(job_id, payload, current_user.id), daemon=True)
     t.start()
 
     return {"fetch_id": job_id, "status": "processing"}
@@ -545,13 +562,13 @@ def get_fetch_status(fetch_id: str):
 
 
 @router.get("", response_model=list[schemas.CandidateOut])
-def list_candidates(db: Session = Depends(get_db)):
-    return db.query(models.Candidate).order_by(models.Candidate.created_at.desc()).all()
+def list_candidates(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    return db.query(models.Candidate).filter(models.Candidate.user_id == current_user.id).order_by(models.Candidate.created_at.desc()).all()
 
 
 @router.post("", response_model=schemas.CandidateOut)
-def create_candidate(payload: schemas.CandidateCreate, db: Session = Depends(get_db)):
-    candidate = models.Candidate(**payload.model_dump())
+def create_candidate(payload: schemas.CandidateCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    candidate = models.Candidate(**payload.model_dump(), user_id=current_user.id)
     db.add(candidate)
     db.commit()
     db.refresh(candidate)
@@ -563,6 +580,7 @@ async def upload_and_score(
     file: UploadFile = File(...),
     job_description: str = Form(...),
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     """Real CV file leta hai, text extract karta hai, Mistral se score karta hai (server-side)."""
     cv_text = extract_text(file)
@@ -573,6 +591,7 @@ async def upload_and_score(
     scoring_failed = result.get("status") != "ok"
 
     candidate = models.Candidate(
+        user_id=current_user.id,
         name=clean_name(result.get("name", "Unknown")),
         email=result.get("email") or "unknown@example.com",
         role=result.get("role", "Software Engineer"),
@@ -597,8 +616,8 @@ async def upload_and_score(
 
 
 @router.patch("/{candidate_id}/stage", response_model=schemas.CandidateOut)
-def update_stage(candidate_id: str, payload: schemas.CandidateStageUpdate, db: Session = Depends(get_db)):
-    candidate = db.query(models.Candidate).filter(models.Candidate.id == candidate_id).first()
+def update_stage(candidate_id: str, payload: schemas.CandidateStageUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    candidate = db.query(models.Candidate).filter(models.Candidate.id == candidate_id, models.Candidate.user_id == current_user.id).first()
     if not candidate:
         raise HTTPException(404, "Couldn't find the Candidate")
     candidate.current_stage = payload.current_stage
@@ -608,8 +627,8 @@ def update_stage(candidate_id: str, payload: schemas.CandidateStageUpdate, db: S
 
 
 @router.patch("/{candidate_id}/status", response_model=schemas.CandidateOut)
-def update_status(candidate_id: str, payload: schemas.CandidateStatusUpdate, db: Session = Depends(get_db)):
-    candidate = db.query(models.Candidate).filter(models.Candidate.id == candidate_id).first()
+def update_status(candidate_id: str, payload: schemas.CandidateStatusUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    candidate = db.query(models.Candidate).filter(models.Candidate.id == candidate_id, models.Candidate.user_id == current_user.id).first()
     if not candidate:
         raise HTTPException(404, "Couldn't find the Candidate ")
     candidate.status = payload.status
@@ -619,43 +638,46 @@ def update_status(candidate_id: str, payload: schemas.CandidateStatusUpdate, db:
 
 
 @router.post("/deduplicate")
-def deduplicate_candidates(db: Session = Depends(get_db)):
+def deduplicate_candidates(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     from sqlalchemy import text
     result = db.execute(text("""
         WITH ranked AS (
             SELECT id, name,
                 ROW_NUMBER() OVER (PARTITION BY name ORDER BY match_score DESC NULLS LAST, created_at ASC) AS rn
             FROM candidates
+            WHERE user_id = :user_id
         )
         DELETE FROM candidates WHERE id IN (SELECT id FROM ranked WHERE rn > 1)
         RETURNING id
-    """))
+    """), {"user_id": current_user.id})
     db.commit()
     deleted = len(result.fetchall())
     return {"ok": True, "deleted": deleted}
 
 
 @router.post("/bulk-delete")
-def delete_selected_candidates(payload: schemas.BulkDeleteRequest, db: Session = Depends(get_db)):
+def delete_selected_candidates(payload: schemas.BulkDeleteRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if not payload.ids:
         return {"ok": True, "deleted": 0}
-    deleted = db.query(models.Candidate).filter(models.Candidate.id.in_(payload.ids)).delete(synchronize_session=False)
-    db.query(models.PipelineResult).filter(models.PipelineResult.candidate_id.in_(payload.ids)).delete(synchronize_session=False)
+    owned_ids = [c.id for c in db.query(models.Candidate.id).filter(models.Candidate.id.in_(payload.ids), models.Candidate.user_id == current_user.id).all()]
+    deleted = db.query(models.Candidate).filter(models.Candidate.id.in_(owned_ids)).delete(synchronize_session=False)
+    db.query(models.PipelineResult).filter(models.PipelineResult.candidate_id.in_(owned_ids)).delete(synchronize_session=False)
     db.commit()
     return {"ok": True, "deleted": deleted}
 
 
 @router.delete("/bulk")
-def delete_all_candidates(db: Session = Depends(get_db)):
-    count = db.query(models.Candidate).delete()
-    db.query(models.PipelineResult).delete()
+def delete_all_candidates(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    owned_ids = [c.id for c in db.query(models.Candidate.id).filter(models.Candidate.user_id == current_user.id).all()]
+    count = db.query(models.Candidate).filter(models.Candidate.id.in_(owned_ids)).delete(synchronize_session=False)
+    db.query(models.PipelineResult).filter(models.PipelineResult.candidate_id.in_(owned_ids)).delete(synchronize_session=False)
     db.commit()
     return {"ok": True, "deleted": count}
 
 
 @router.delete("/{candidate_id}")
-def delete_candidate(candidate_id: str, db: Session = Depends(get_db)):
-    candidate = db.query(models.Candidate).filter(models.Candidate.id == candidate_id).first()
+def delete_candidate(candidate_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    candidate = db.query(models.Candidate).filter(models.Candidate.id == candidate_id, models.Candidate.user_id == current_user.id).first()
     if not candidate:
         raise HTTPException(404, "Couldn't find the Candidate")
     db.delete(candidate)
@@ -664,14 +686,22 @@ def delete_candidate(candidate_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/enrich")
-def enrich_candidates(db: Session = Depends(get_db)):
+def enrich_candidates(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     enriched = 0
+    scanned = 0
     candidates = db.query(models.Candidate).filter(
+        models.Candidate.user_id == current_user.id,
         models.Candidate.cv_text.isnot(None),
         models.Candidate.cv_text != "",
         models.Candidate.gender.is_(None),
     ).all()
     for c in candidates:
+        if not has_real_cv(c.cv_text):
+            # Sourced leads (no real CV) are excluded from "scanned" too - they were
+            # never eligible, so counting them here made a correct 0-enriched result
+            # look like a failure.
+            continue
+        scanned += 1
         try:
             job_text = f"Review candidate profile for {c.role or 'Professional'} position"
             result = score_with_mistral(c.cv_text, job_text)
@@ -691,21 +721,24 @@ def enrich_candidates(db: Session = Depends(get_db)):
         except Exception:
             continue
     db.commit()
-    return {"ok": True, "enriched": enriched, "scanned": len(candidates)}
+    return {"ok": True, "enriched": enriched, "scanned": scanned}
 
 
 @router.post("/{candidate_id}/screen", response_model=schemas.CandidateOut)
-def screen_candidate(candidate_id: str, payload: schemas.JobDescriptionCreate, db: Session = Depends(get_db)):
-    candidate = db.query(models.Candidate).filter(models.Candidate.id == candidate_id).first()
+def screen_candidate(candidate_id: str, payload: schemas.JobDescriptionCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    candidate = db.query(models.Candidate).filter(models.Candidate.id == candidate_id, models.Candidate.user_id == current_user.id).first()
     if not candidate:
         raise HTTPException(404, "Candidate not found")
     cv_text = candidate.cv_text or ""
     if not cv_text:
         raise HTTPException(400, "No CV text available for this candidate")
+    if not has_real_cv(cv_text):
+        raise HTTPException(400, "This candidate has no CV on file - upload one before AI screening")
     result = score_with_mistral(cv_text, payload.text)
-    candidate.match_score = int(result.get("score", 75))
-    candidate.summary = result.get("summary", "")
-    candidate.current_stage = "Done"
+    scoring_failed = result.get("status") != "ok"
+    candidate.match_score = result.get("score")
+    candidate.summary = result.get("summary", "") if not scoring_failed else "AI scoring failed for this candidate - retry recommended."
+    candidate.current_stage = "Needs Rescoring" if scoring_failed else "Done"
     candidate.status = "Screening"
     if result.get("gender"):
         candidate.gender = result["gender"]
