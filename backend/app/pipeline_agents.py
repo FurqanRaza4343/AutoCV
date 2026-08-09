@@ -8,8 +8,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
-MAX_WORKERS = 5
-RANK_CHUNK_SIZE = 12
+MAX_WORKERS = 8
 
 
 def _call_mistral(prompt: str, response_format: dict | None = None) -> str:
@@ -27,7 +26,7 @@ def _call_mistral(prompt: str, response_format: dict | None = None) -> str:
             "Content-Type": "application/json",
         },
         json=payload,
-        timeout=(10, 25),
+        timeout=(8, 20),
     )
     resp.raise_for_status()
     return resp.json()["choices"][0]["message"]["content"].strip()
@@ -40,6 +39,13 @@ def _call_mistral(prompt: str, response_format: dict | None = None) -> str:
 )
 def _call_mistral_safe(prompt: str, response_format: dict | None = None) -> str:
     return _call_mistral(prompt, response_format)
+
+
+def has_real_cv(cv_text: str | None) -> bool:
+    """A lead sourced from LinkedIn/SERP has no resume - its cv_text is a JSON dump
+    of the search snippet (see apify_scraper.normalize_serp_to_candidate), not prose.
+    Duplicated from routers/candidates.py to avoid a circular import."""
+    return bool(cv_text) and not cv_text.strip().startswith("{")
 
 
 def _parse_json(text: str) -> dict:
@@ -156,82 +162,119 @@ Respond with ONLY valid JSON:
     }
 
 
-def _rank_chunk(chunk: list[dict], job_description: str) -> None:
-    """Rank one chunk of candidates in place, mutating each entry's 'ranked' key."""
-    profiles_text = ""
-    for i, c in enumerate(chunk):
-        p = c.get("parsed", {})
-        s = c.get("screened", {})
-        skills_str = ", ".join(p.get("skills", [])) if isinstance(p.get("skills"), list) else str(p.get("skills", ""))
-        profiles_text += f"\nCandidate {i}: {p.get('name', 'Unknown')}\n  Role: {p.get('role', '')}\n  Skills: {skills_str}\n  Experience: {p.get('experience_years')}y\n  Screened Score: {s.get('screened_score')}\n  Verdict: {s.get('verdict', '')}\n"
-
-    prompt = f"""You are Agentix Deep Ranker AI — an expert comparative ranking agent.
-Rank the following candidates by fit for the job description. Provide a ranked score (0-100) and analysis for each.
+def agent_parse_and_screen(candidate: dict, job_description: str) -> tuple[dict, dict]:
+    """Combines what agent_parse + agent_screen used to do as two sequential Mistral
+    calls into a single round-trip - this is the single biggest lever on pipeline
+    latency, since every candidate previously paid for two full API round-trips
+    (each with its own network + inference time) before ranking could even start."""
+    cv_text = candidate.get("cv_text", "") or json.dumps(candidate)
+    prompt = f"""You are Agentix AI — an expert HR parsing and screening agent.
+Extract structured data from the raw candidate data below AND score how well they
+match the job description, in one response.
 
 Job Description:
 {job_description[:2000]}
 
-Candidates:
-{profiles_text}
+Raw Candidate Data:
+{cv_text[:4000]}
 
-Respond with ONLY valid JSON as an array:
-[
-  {{
-    "candidate_index": 0,
-    "ranked_score": <integer 0-100>,
-    "analysis": "detailed comparative analysis"
-  }},
-  ...
-]
-Include every candidate index exactly once."""
+Respond with ONLY valid JSON:
+{{
+  "name": "full name",
+  "email": "email",
+  "role": "best-fit job title",
+  "skills": ["skill1", "skill2"],
+  "experience_years": <number or null>,
+  "location": "city",
+  "gender": "Male/Female/null",
+  "shift_preference": "Morning/Night/Any",
+  "is_remote": true/false/null,
+  "age": <number or null>,
+  "summary": "1-2 sentence candidate summary",
+  "score": <integer 0-100 fit against the job description>,
+  "screening_summary": "2-3 sentence screening assessment",
+  "strengths": ["strength1", "strength2"],
+  "gaps": ["gap1", "gap2"],
+  "verdict": "Strong Match / Moderate Match / Weak Match"
+}}"""
 
     try:
-        raw = _call_mistral_safe(prompt)
-        array_match = re.search(r"\[[\s\S]*\]", raw)
-        if array_match:
-            rankings = json.loads(array_match.group(0))
-            for r in rankings:
-                idx = r.get("candidate_index")
-                if isinstance(idx, int) and 0 <= idx < len(chunk) and isinstance(r.get("ranked_score"), (int, float)):
-                    chunk[idx]["ranked"] = {
-                        "status": "ok",
-                        "ranked_score": int(r["ranked_score"]),
-                        "ranked_analysis": r.get("analysis", ""),
-                    }
+        raw = _call_mistral_safe(prompt, {"type": "json_object"})
+        data = _parse_json(raw)
     except Exception:
-        pass
+        data = {}
 
-    for c in chunk:
-        if "ranked" not in c:
-            c["ranked"] = {"status": "failed", "ranked_score": None, "ranked_analysis": ""}
+    parse_status = "ok" if data else "failed"
+    parsed = {
+        "status": parse_status,
+        "name": data.get("name", candidate.get("name", "Unknown")),
+        "email": data.get("email", candidate.get("email", "")),
+        "role": data.get("role", candidate.get("role", "Professional")),
+        "skills": data.get("skills", candidate.get("skills", "").split(", ") if candidate.get("skills") else []),
+        "experience_years": data.get("experience_years", candidate.get("experience_years")),
+        "location": data.get("location", candidate.get("location", "")),
+        "gender": data.get("gender", candidate.get("gender")),
+        "shift_preference": data.get("shift_preference", candidate.get("shift_preference", "Any")),
+        "is_remote": data.get("is_remote", candidate.get("is_remote")),
+        "age": data.get("age", candidate.get("age")),
+        "summary": data.get("summary", ""),
+    }
+
+    # Same "never invent a plausible-looking score" rule as agent_screen: only trust
+    # a response that actually returned a numeric score.
+    screen_status = "ok" if isinstance(data.get("score"), (int, float)) else "failed"
+    if screen_status == "failed":
+        screened = {
+            "status": "failed",
+            "screened_score": None,
+            "screened_summary": "AI screening failed for this candidate (no response from model).",
+            "strengths": [],
+            "gaps": [],
+            "verdict": "Needs Rescoring",
+        }
+    else:
+        screened = {
+            "status": "ok",
+            "screened_score": int(data["score"]),
+            "screened_summary": data.get("screening_summary", ""),
+            "strengths": data.get("strengths", []),
+            "gaps": data.get("gaps", []),
+            "verdict": data.get("verdict", "Moderate Match"),
+        }
+
+    return parsed, screened
 
 
 def agent_deep_rank(candidates_with_scores: list[dict], job_description: str) -> list[dict]:
-    # Only candidates that were genuinely screened can be meaningfully ranked -
-    # a failed screen has no real score to compare against peers.
+    # Ranking is derived directly from each candidate's own screened_score instead of
+    # a second comparative-ranking Mistral call. That extra round-trip (one big prompt
+    # listing every candidate) was the dominant source of pipeline slowness and the
+    # single point where runs would hang for minutes - agent_parse_and_screen already
+    # produces a real, job-description-aware 0-100 score per candidate, so re-asking
+    # the model to rank the same candidates added latency without adding information.
     rankable = [c for c in candidates_with_scores if c.get("screened", {}).get("status") == "ok"]
     unrankable = [c for c in candidates_with_scores if c.get("screened", {}).get("status") != "ok"]
 
+    for c in rankable:
+        s = c["screened"]
+        c["ranked"] = {
+            "status": "ok",
+            "ranked_score": s["screened_score"],
+            "ranked_analysis": s.get("screened_summary", ""),
+        }
     for c in unrankable:
-        c["ranked"] = {"status": "failed", "ranked_score": None, "ranked_analysis": ""}
+        # Preserve "low_confidence" (no real CV) vs "failed" (AI call errored) instead
+        # of collapsing both into "failed" - they need different verdicts downstream.
+        status = c.get("screened", {}).get("status", "failed")
+        c["ranked"] = {"status": status, "ranked_score": None, "ranked_analysis": ""}
 
-    chunks = [rankable[i:i + RANK_CHUNK_SIZE] for i in range(0, len(rankable), RANK_CHUNK_SIZE)]
-    if chunks:
-        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(chunks))) as executor:
-            futures = [executor.submit(_rank_chunk, chunk, job_description) for chunk in chunks]
-            for future in as_completed(futures):
-                future.result()
-
-    ranked_ok = [c for c in rankable if c.get("ranked", {}).get("status") == "ok"]
-    ranked_ok.sort(key=lambda x: x["ranked"]["ranked_score"], reverse=True)
-    for i, c in enumerate(ranked_ok):
+    rankable.sort(key=lambda x: x["ranked"]["ranked_score"], reverse=True)
+    for i, c in enumerate(rankable):
         c["ranked"]["rank_position"] = i + 1
-
-    failed = [c for c in candidates_with_scores if c.get("ranked", {}).get("status") != "ok"]
-    for c in failed:
+    for c in unrankable:
         c["ranked"]["rank_position"] = None
 
-    return ranked_ok + failed
+    return rankable + unrankable
 
 
 def agent_finalize(candidates_ranked: list[dict], job_description: str) -> tuple[list[dict], dict | None]:
@@ -240,6 +283,13 @@ def agent_finalize(candidates_ranked: list[dict], job_description: str) -> tuple
     # "Do Not Recommend".
     for c in candidates_ranked:
         ranked = c.get("ranked", {})
+        if ranked.get("status") == "low_confidence":
+            c["final"] = {
+                "final_verdict": "Low Confidence — No CV",
+                "final_notes": "This is a sourced lead with no CV on file, not a fully screened candidate.",
+                "next_steps": "Ask the candidate for a resume, then re-run the pipeline.",
+            }
+            continue
         if ranked.get("status") != "ok":
             c["final"] = {
                 "final_verdict": "Needs Rescoring",
@@ -256,47 +306,45 @@ def agent_finalize(candidates_ranked: list[dict], job_description: str) -> tuple
             verdict = "Do Not Recommend"
         c["final"] = {"final_verdict": verdict, "final_notes": "", "next_steps": ""}
 
+    # The top candidate's notes are built from what agent_parse_and_screen already
+    # extracted (strengths/gaps/summary) instead of a third Mistral round-trip -
+    # that call was non-essential (decorative recommendation text) but still added
+    # a full request's worth of latency and failure risk to every pipeline run.
     best = next((c for c in candidates_ranked if c.get("ranked", {}).get("status") == "ok"), None)
     if best:
-        p = best.get("parsed", {})
-        r = best.get("ranked", {})
         s = best.get("screened", {})
-        prompt = f"""You are Agentix Finalizer AI — the concluding HR decision agent.
-Given the best-matching candidate, produce a final hiring recommendation.
-
-Best Candidate:
-- Name: {p.get('name', 'Unknown')}
-- Role: {p.get('role', '')}
-- Skills: {p.get('skills', [])}
-- Experience: {p.get('experience_years')}y
-- Screened Score: {s.get('screened_score')}
-- Ranked Score: {r.get('ranked_score')}
-- Rank Position: {r.get('rank_position')}
-
-Job Description:
-{job_description[:1500]}
-
-Respond with ONLY valid JSON:
-{{
-  "final_notes": "detailed final recommendation",
-  "next_steps": "suggested next steps"
-}}"""
-        try:
-            raw = _call_mistral_safe(prompt, {"type": "json_object"})
-            data = _parse_json(raw)
-            if data:
-                # Verdict stays deterministic (set above) - the LLM only enriches notes/next_steps.
-                best["final"]["final_notes"] = data.get("final_notes", "")
-                best["final"]["next_steps"] = data.get("next_steps", "")
-        except Exception:
-            pass
+        strengths = s.get("strengths", [])
+        gaps = s.get("gaps", [])
+        notes_parts = [s.get("screened_summary", "")]
+        if strengths:
+            notes_parts.append("Strengths: " + ", ".join(strengths) + ".")
+        if gaps:
+            notes_parts.append("Gaps: " + ", ".join(gaps) + ".")
+        best["final"]["final_notes"] = " ".join(p for p in notes_parts if p)
+        best["final"]["next_steps"] = (
+            "Schedule an interview to validate fit." if best["final"]["final_verdict"] == "Recommend"
+            else "Review gaps before proceeding to interview." if best["final"]["final_verdict"] == "Consider"
+            else "Not recommended - consider other candidates first."
+        )
 
     return candidates_ranked, best
 
 
 def run_pipeline_stage(cand_dict: dict, cand_id: str, job_description: str) -> dict:
-    parsed = agent_parse(cand_dict, job_description)
-    screened = agent_screen(cand_dict, parsed, job_description)
+    if not has_real_cv(cand_dict.get("cv_text", "")):
+        # A lead with no real CV (e.g. a LinkedIn/SERP-sourced snippet) must never be
+        # run through the full CV-scoring prompt as if it were a real resume.
+        low_confidence = {
+            "status": "low_confidence",
+            "name": cand_dict.get("name", "Unknown"),
+        }
+        return {
+            "candidate_id": cand_id,
+            "candidate": cand_dict,
+            "parsed": {**low_confidence, "role": cand_dict.get("role", "Professional"), "skills": []},
+            "screened": {**low_confidence, "screened_score": None, "screened_summary": "No CV on file - this is a sourced lead, not a fully screened candidate.", "strengths": [], "gaps": [], "verdict": "Low Confidence — No CV"},
+        }
+    parsed, screened = agent_parse_and_screen(cand_dict, job_description)
     return {"candidate_id": cand_id, "candidate": cand_dict, "parsed": parsed, "screened": screened}
 
 
