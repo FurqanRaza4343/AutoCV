@@ -13,33 +13,22 @@ router = APIRouter(prefix="/diagnostics", tags=["diagnostics"])
 
 
 def _test_apify_async(result_container: dict):
+    # A lightweight account-identity check is enough to confirm the token is valid -
+    # no need to burn a real actor run (and 30s+ of wait time) on every diagnostics call.
     apify_token = os.getenv("APIFY_API_TOKEN", "")
     if not apify_token:
         result_container["apify"] = "No token configured"
         return
     try:
-        resp = requests.post(
-            "https://api.apify.com/v2/acts/memo23~rozee-scraper/runs",
-            headers={"Authorization": f"Bearer {apify_token}", "Content-Type": "application/json"},
-            json={"searchQueries": ["web developer"], "locations": [], "maxItemsPerQuery": 2, "scrapeJobDetails": True},
+        resp = requests.get(
+            "https://api.apify.com/v2/users/me",
+            headers={"Authorization": f"Bearer {apify_token}"},
             timeout=15,
         )
-        run_id = resp.json()["data"]["id"]
-        for _ in range(6):
-            time.sleep(5)
-            sr = requests.get(f"https://api.apify.com/v2/actor-runs/{run_id}", headers={"Authorization": f"Bearer {apify_token}"}, timeout=15)
-            st = sr.json()["data"]["status"]
-            if st == "SUCCEEDED":
-                did = sr.json()["data"]["defaultDatasetId"]
-                ir = requests.get(f"https://api.apify.com/v2/datasets/{did}/items", headers={"Authorization": f"Bearer {apify_token}"}, timeout=15)
-                items = ir.json()
-                if not isinstance(items, list): items = []
-                result_container["apify"] = f"OK: {len(items)} items"
-                return
-            elif st in ("FAILED", "ABORTED", "TIMED-OUT"):
-                result_container["apify"] = f"Failed: {st}"
-                return
-        result_container["apify"] = "Timed out (30s)"
+        if resp.status_code == 200:
+            result_container["apify"] = "OK: token valid"
+        else:
+            result_container["apify"] = f"Failed: HTTP {resp.status_code}"
     except Exception as e:
         result_container["apify"] = f"Error: {type(e).__name__}"
 
