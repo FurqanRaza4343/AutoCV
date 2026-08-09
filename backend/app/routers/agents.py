@@ -11,6 +11,11 @@ from ..email_service import send_screening_result, send_interview_invite
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
+# Scheduled/background bots run outside any HTTP request, so there's no per-request
+# current_user to scope their writes to. They operate on behalf of the primary
+# workspace account rather than leaking across every user's data indiscriminately.
+PRIMARY_USER_ID = "cae2b815-50dc-4f11-9c17-e60dfe93624f"
+
 
 @router.get("", response_model=list[schemas.AgentOutWithConfig])
 def list_agents(db: Session = Depends(get_db)):
@@ -100,13 +105,14 @@ def _run_fetcher_bot():
                 for item in serp_items:
                     cand = normalize_serp_to_candidate(item, keyword)
                     cand["name"] = clean_name(cand.get("name", ""))
-                    existing = db.query(models.Candidate).filter(models.Candidate.name == cand.get("name", "")).first()
+                    existing = db.query(models.Candidate).filter(models.Candidate.name == cand.get("name", ""), models.Candidate.user_id == PRIMARY_USER_ID).first()
                     if not existing:
                         # No real CV/resume here - only a headline/snippet. Score
                         # conservatively and label it clearly rather than faking a
                         # full screening result.
                         result = score_lead_lightweight(cand.get("role", ""), cand.get("skills", ""), cand.get("summary", ""), keyword)
                         c = models.Candidate(
+                            user_id=PRIMARY_USER_ID,
                             name=cand.get("name", "Unknown")[:100],
                             email=cand.get("email", "unknown@example.com")[:200],
                             role=cand.get("role", "Professional")[:100],
@@ -153,6 +159,7 @@ def _run_parser_bot():
 
         print("[parser-bot] Starting parse cycle...")
         candidates = db.query(models.Candidate).filter(
+            models.Candidate.user_id == PRIMARY_USER_ID,
             models.Candidate.cv_text.isnot(None),
             models.Candidate.cv_text != "",
             models.Candidate.skills.is_(None),
@@ -216,7 +223,7 @@ def _run_parser_bot():
 def _run_ranker_bot():
     db = SessionLocal()
     try:
-        from .candidates import score_with_mistral
+        from .candidates import score_with_mistral, has_real_cv
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         print("[ranker-bot] Starting ranking cycle...")
@@ -226,10 +233,16 @@ def _run_ranker_bot():
             return
         job_desc = jd.text
 
-        candidates = db.query(models.Candidate).filter(
-            models.Candidate.cv_text.isnot(None),
-            models.Candidate.cv_text != "",
-        ).all()
+        # Excludes LinkedIn leads (cv_text is a JSON snippet dump, not a real resume) -
+        # those must keep their "Low Confidence - No CV" label, not get fully re-scored.
+        candidates = [
+            c for c in db.query(models.Candidate).filter(
+                models.Candidate.user_id == PRIMARY_USER_ID,
+                models.Candidate.cv_text.isnot(None),
+                models.Candidate.cv_text != "",
+            ).all()
+            if has_real_cv(c.cv_text)
+        ]
 
         results_by_id: dict[str, dict] = {}
         if candidates:

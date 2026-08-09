@@ -185,7 +185,7 @@ class FetchRequest(BaseModel):
     job_title: str = ""
     job_description: str
     filters: FetchFilters = FetchFilters()
-    max_results_per_source: int = 10
+    max_results_per_source: int = 20
 
 
 class FetchedCandidateOut(CandidateOut):

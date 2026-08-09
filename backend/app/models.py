@@ -24,6 +24,7 @@ class Candidate(Base):
     __tablename__ = "candidates"
 
     id = Column(String, primary_key=True, default=gen_id)
+    user_id = Column(String, nullable=True, index=True)
     name = Column(String, nullable=False)
     email = Column(String, nullable=False)
     role = Column(String, nullable=False)
@@ -84,6 +85,7 @@ class PipelineRun(Base):
     __tablename__ = "pipeline_runs"
 
     id = Column(String, primary_key=True, default=gen_id)
+    user_id = Column(String, nullable=True, index=True)
     job_title = Column(String, default="")
     job_description = Column(Text, default="")
     status = Column(String, default="pending")
