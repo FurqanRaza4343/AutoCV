@@ -122,7 +122,9 @@ export default function Navbar({ currentTab, setCurrentTab, user, onSignIn, onSi
                   aria-label="View notifications"
                 >
                   <Bell className="h-5 w-5" />
-                  <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-indigo-600" />
+                  {notifications.some((n) => !n.isRead) && (
+                    <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-indigo-600" />
+                  )}
                 </button>
 
                 <AnimatePresence>
@@ -170,7 +172,7 @@ export default function Navbar({ currentTab, setCurrentTab, user, onSignIn, onSi
                   <button
                     onClick={() => setIsProfileOpen(!isProfileOpen)}
                     className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white p-1 sm:pr-2.5 hover:bg-slate-50 transition-all text-left focus:outline-none"
-                    id="clerk-user-profile-btn"
+                    id="user-profile-btn"
                   >
                     <img
                       src={user.avatarUrl}
@@ -202,30 +204,33 @@ export default function Navbar({ currentTab, setCurrentTab, user, onSignIn, onSi
                           </div>
 
                           <button
-                            onClick={() => { setIsProfileOpen(false); alert("Clerk Settings: Profile editing is fully simulated in this development environment!"); }}
-                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 transition"
-                            id="clerk-profile-settings"
+                            disabled
+                            className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-400 cursor-not-allowed"
+                            id="profile-settings"
+                            title="Coming soon"
                           >
-                            <User className="h-4 w-4 text-slate-400" />
-                            Manage Profile
+                            <span className="flex items-center gap-2"><User className="h-4 w-4 text-slate-300" />Manage Profile</span>
+                            <span className="text-[9px] font-semibold uppercase tracking-wide text-slate-300">Soon</span>
                           </button>
 
                           <button
-                            onClick={() => { setIsProfileOpen(false); alert("Organization Hub: You can configure custom roles and permission maps."); }}
-                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 transition"
-                            id="clerk-org-settings"
+                            disabled
+                            className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-400 cursor-not-allowed"
+                            id="org-settings"
+                            title="Coming soon"
                           >
-                            <Briefcase className="h-4 w-4 text-slate-400" />
-                            Switch Workspace
+                            <span className="flex items-center gap-2"><Briefcase className="h-4 w-4 text-slate-300" />Switch Workspace</span>
+                            <span className="text-[9px] font-semibold uppercase tracking-wide text-slate-300">Soon</span>
                           </button>
 
                           <button
-                            onClick={() => { setIsProfileOpen(false); alert("Enterprise Settings: SAML/SSO & API keys configuration."); }}
-                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 transition"
-                            id="clerk-app-settings"
+                            disabled
+                            className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-400 cursor-not-allowed"
+                            id="app-settings"
+                            title="Coming soon"
                           >
-                            <Settings className="h-4 w-4 text-slate-400" />
-                            Platform Settings
+                            <span className="flex items-center gap-2"><Settings className="h-4 w-4 text-slate-300" />Platform Settings</span>
+                            <span className="text-[9px] font-semibold uppercase tracking-wide text-slate-300">Soon</span>
                           </button>
 
                           <div className="border-t border-slate-100 my-1" />
@@ -233,7 +238,7 @@ export default function Navbar({ currentTab, setCurrentTab, user, onSignIn, onSi
                           <button
                             onClick={() => { setIsProfileOpen(false); onSignOut(); }}
                             className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-rose-600 hover:bg-rose-50 transition"
-                            id="clerk-signout-btn"
+                            id="signout-btn"
                           >
                             <LogOut className="h-4 w-4" />
                             Sign out
@@ -247,7 +252,7 @@ export default function Navbar({ currentTab, setCurrentTab, user, onSignIn, onSi
                 <button
                   onClick={onSignIn}
                   className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-slate-800 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-950"
-                  id="clerk-signin-placeholder-btn"
+                  id="signin-btn"
                 >
                   <User className="h-3.5 w-3.5" />
                   <span>Sign In</span>

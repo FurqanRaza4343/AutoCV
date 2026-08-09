@@ -22,9 +22,10 @@ interface ResultsDashboardProps {
 function getVerdictColor(verdict: string | null) {
   if (!verdict) return "text-slate-400";
   const v = verdict.toLowerCase();
-  // A failed AI call must never look like a real "Do Not Recommend" rejection -
-  // it needs a visibly different (neutral, retry-able) treatment.
+  // A failed AI call or an unscored lead must never look like a real "Do Not
+  // Recommend" rejection - both need a visibly different, neutral treatment.
   if (v.includes("needs rescoring")) return "text-slate-500 bg-slate-100 border-slate-300";
+  if (v.includes("low confidence")) return "text-sky-600 bg-sky-50 border-sky-200";
   if (v.includes("strongly recommend")) return "text-emerald-600 bg-emerald-50 border-emerald-200";
   if (v.includes("recommend")) return "text-blue-600 bg-blue-50 border-blue-200";
   if (v.includes("consider")) return "text-amber-600 bg-amber-50 border-amber-200";
@@ -245,7 +246,7 @@ export default function ResultsDashboard({ run, results, showToast }: ResultsDas
                   </td>
                   <td className="px-3 py-3">
                     <div className="font-semibold text-slate-800">{r.candidate_name}</div>
-                    <div className="text-[10px] text-slate-400">{r.candidate_email}</div>
+                    <div className="text-[10px] text-slate-500">{r.candidate_email}</div>
                   </td>
                   <td className="px-3 py-3 text-slate-600">{r.role || "—"}</td>
                   <td className="px-3 py-3 max-w-[200px]">

@@ -101,10 +101,16 @@ export default function AgentAnalytics({ mode = "agents", bots, onToggleBot, onR
             </div>
 
             <div className="flex items-center gap-2 self-start md:self-center">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100">
-                <Zap className="h-3.5 w-3.5 text-indigo-500 fill-indigo-100" />
-                <span>Autonomous Mode: Enabled</span>
-              </span>
+              {bots.some((b) => b.isRunning) ? (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100">
+                  <Zap className="h-3.5 w-3.5 text-indigo-500 fill-indigo-100" />
+                  <span>{bots.filter((b) => b.isRunning).length} Agent(s) Active</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-500 border border-slate-200">
+                  <span>All Agents Paused</span>
+                </span>
+              )}
             </div>
           </div>
 
