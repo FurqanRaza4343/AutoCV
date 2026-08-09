@@ -72,28 +72,47 @@ def run_linkedin_serp_search(keyword: str, location: str = "", max_results: int 
     if location:
         query += f" {location}"
 
-    params = {
-        "q": query,
-        "api_key": SERPAPI_KEY,
-        "num": min(max_results, 10),
-        "engine": "google",
-        "hl": "en",
-    }
+    results = []
+    seen_urls = set()
+    page = 0
+    # Google/SerpAPI reliably returns ~10 organic results per page for a site: filtered
+    # query - paginate with "start" so a caller asking for 20+ actually gets them,
+    # instead of silently capping at one page. Bounded to 4 pages (~40) to limit cost.
+    while len(results) < max_results and page < 4:
+        params = {
+            "q": query,
+            "api_key": SERPAPI_KEY,
+            "num": 10,
+            "start": page * 10,
+            "engine": "google",
+            "hl": "en",
+        }
+        try:
+            resp = requests.get(SERPAPI_BASE, params=params, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            organic = data.get("organic_results", [])
+        except Exception as e:
+            print(f"[serp] Error on page {page}: {e}")
+            break
 
-    try:
-        resp = requests.get(SERPAPI_BASE, params=params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        organic = data.get("organic_results", [])
-        results = []
-        for item in organic[:max_results]:
+        if not organic:
+            break
+
+        for item in organic:
+            if len(results) >= max_results:
+                break
             title = item.get("title", "")
             snippet = item.get("snippet", "")
             link = item.get("link", "")
 
-            if "linkedin.com/in/" not in link:
+            if "linkedin.com/in/" not in link or link in seen_urls:
                 continue
+            seen_urls.add(link)
 
+            # Strip invisible Unicode direction-control marks (U+200E/U+200F/U+200B) that
+            # Google sometimes embeds in titles for RTL-language (e.g. Arabic) profiles.
+            title = re.sub(r"[​‎‏]", "", title) if title else title
             clean_title = title.replace(" - LinkedIn", "").replace(" - Profiles", "").strip() if title else "Unknown"
             # Google-indexed titles are usually "Name - Role - LinkedIn" or a full headline
             # like "Name - Role | Talks about ...". Only the first segment is ever a person's
@@ -102,12 +121,20 @@ def run_linkedin_serp_search(keyword: str, location: str = "", max_results: int 
             name = (segments[0].strip() if segments and segments[0].strip() else "Unknown")[:60]
             role = segments[1].strip() if len(segments) > 1 else ""
 
-            location_found = location if location else ""
-            snippet_lower = snippet.lower()
-            for loc_word in ["karachi", "lahore", "islamabad", "rawalpindi", "pakistan"]:
-                if loc_word in snippet_lower:
-                    location_found = loc_word.capitalize()
-                    break
+            # If the caller explicitly searched for a city, trust that - this result
+            # came back FOR that search, so it shouldn't be overridden by a different
+            # city mentioned in passing in the snippet (e.g. "moved from Lahore to
+            # Karachi"), which was silently causing genuinely-matching leads to fail
+            # the location filter downstream and get dropped entirely.
+            if location:
+                location_found = location
+            else:
+                location_found = ""
+                snippet_lower = snippet.lower()
+                for loc_word in ["karachi", "lahore", "islamabad", "rawalpindi", "pakistan"]:
+                    if loc_word in snippet_lower:
+                        location_found = loc_word.capitalize()
+                        break
 
             skills = snippet[:200] if snippet else ""
 
@@ -120,11 +147,11 @@ def run_linkedin_serp_search(keyword: str, location: str = "", max_results: int 
                 "profile_url": link,
                 "source": "LinkedIn (Google)",
             })
-        print(f"[serp] Found {len(results)} LinkedIn profiles for '{keyword}'")
-        return results
-    except Exception as e:
-        print(f"[serp] Error: {e}")
-        return []
+
+        page += 1
+
+    print(f"[serp] Found {len(results)} LinkedIn profiles for '{keyword}'")
+    return results
 
 
 def normalize_serp_to_candidate(item: dict, job_description: str) -> dict:
