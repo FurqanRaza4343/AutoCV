@@ -11,7 +11,7 @@ import {
   XCircle,
   Star,
 } from "lucide-react";
-import { PipelineResultDTO, PipelineRunDTO, api } from "../api";
+import { PipelineResultDTO, PipelineRunDTO, api, getAuthToken } from "../api";
 
 interface ResultsDashboardProps {
   run: PipelineRunDTO | null;
@@ -59,7 +59,10 @@ export default function ResultsDashboard({ run, results, showToast }: ResultsDas
     );
   }
 
-  const bestMatch = results.find((r) => r.is_best_match) || results[0];
+  // A lead with no CV (score/rank both null) must never be presented as the "Best
+  // Match" - only crown a candidate that was actually scored against the job description.
+  const scoredCandidates = results.filter((r) => r.ranked_score != null || r.screened_score != null);
+  const bestMatch = scoredCandidates.find((r) => r.is_best_match) || scoredCandidates[0] || null;
   const sorted = [...results].sort((a, b) => (a.rank_position || 999) - (b.rank_position || 999));
   // Only average over candidates that were genuinely scored - a batch of failed AI
   // calls (score = null) must not drag the average down to look like real low scores.
@@ -71,30 +74,29 @@ export default function ResultsDashboard({ run, results, showToast }: ResultsDas
   const highMatchCount = results.filter((r) => (r.ranked_score || r.screened_score || 0) >= 80).length;
   const recommendCount = results.filter((r) => r.final_verdict && (r.final_verdict.toLowerCase().includes("recommend") || r.final_verdict.toLowerCase().includes("strongly"))).length;
 
-  const handleExport = (resultId: string, format: "txt" | "xlsx" | "pdf") => {
+  const handleExport = async (resultId: string, format: "txt" | "xlsx" | "pdf") => {
     const urls = {
       txt: api.pipeline.exportTxt(resultId),
       xlsx: api.pipeline.exportXlsx(resultId),
       pdf: api.pipeline.exportPdf(resultId),
     };
-    const token = localStorage.getItem("auth_token");
-    fetch(urls[format], {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error("Export failed");
-        return res.blob();
-      })
-      .then((blob) => {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `candidate_${resultId.slice(0, 8)}.${format}`;
-        a.click();
-        URL.revokeObjectURL(url);
-        showToast(`Exported as .${format}`);
-      })
-      .catch((e) => showToast(`Export error: ${e.message}`));
+    try {
+      const token = await getAuthToken();
+      const res = await fetch(urls[format], {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `candidate_${resultId.slice(0, 8)}.${format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast(`Exported as .${format}`);
+    } catch (e: any) {
+      showToast(`Export error: ${e.message}`);
+    }
   };
 
   return (
@@ -201,6 +203,20 @@ export default function ResultsDashboard({ run, results, showToast }: ResultsDas
             >
               <FilePdf className="h-3.5 w-3.5" /> .pdf
             </button>
+          </div>
+        </div>
+      )}
+
+      {!bestMatch && results.length > 0 && (
+        <div className="rounded-2xl border border-sky-200 bg-sky-50 p-5 flex items-start gap-3">
+          <FileText className="h-5 w-5 text-sky-500 shrink-0 mt-0.5" />
+          <div>
+            <h3 className="text-sm font-bold text-sky-900">No fully-screened candidates yet</h3>
+            <p className="text-xs text-sky-700 mt-1 leading-relaxed">
+              Every candidate in this batch is a sourced lead with no CV on file, so none of them could be
+              scored against the job description - a real score needs an actual resume to read. Upload a CV
+              for these candidates (or ask them for one) and re-run the pipeline to get a real ranking.
+            </p>
           </div>
         </div>
       )}
