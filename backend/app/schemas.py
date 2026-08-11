@@ -83,36 +83,6 @@ class JobDescriptionOut(JobDescriptionCreate):
         )
 
 
-class UserOut(BaseModel):
-    id: str
-    email: str
-    name: str
-    role: str
-    avatar_url: Optional[str] = None
-
-    class Config:
-        from_attributes = True
-
-
-class RegisterRequest(BaseModel):
-    email: str
-    password: str
-    name: str
-    role: str = "HR Recruiter"
-
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-
-class GoogleAuthRequest(BaseModel):
-    credential: str
-
-
-class AuthOut(BaseModel):
-    token: str
-    user: UserOut
 
 
 class AgentConfigUpdate(BaseModel):
