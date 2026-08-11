@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useAppStore, CandidateStatus, QueueStage, Candidate } from "./store/useAppStore";
 import { useAuthStore } from "./store/useAuthStore";
-import { api } from "./api";
+import { api, setUnauthorizedHandler } from "./api";
 import { 
   Bot, Sparkles, Search, Plus, Filter, CheckCircle2, 
   FileText, Sliders, Eye, RefreshCw, 
@@ -10,6 +10,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import Navbar from "./components/Navbar";
 import AuthModal from "./components/AuthModal";
+import ClerkAuthBridge from "./components/ClerkAuthBridge";
 import AgentAnalytics from "./components/AgentAnalytics";
 import BulkUploadZone from "./components/BulkUploadZone";
 import AgentQueue from "./components/AgentQueue";
@@ -25,6 +26,7 @@ import { CandidateDTO } from "./api";
 import { NAV_ITEMS } from "./navConfig";
 import { scoreBadgeClass } from "./lib/scoreColor";
 import { platformDotClass, platformBadgeClass } from "./lib/platformBadge";
+import { countSkillFrequency, SKILL_CHART_COLORS } from "./lib/skillStats";
 
 // Define TypeScript interfaces for our application state
 interface AIAgent {
@@ -83,18 +85,14 @@ export default function App() {
   // Current Navigation Tab
   const [currentTab, setCurrentTab] = useState("landing");
 
-  // Authentication State
+  // Authentication State - Clerk itself is the source of truth; ClerkAuthBridge (rendered
+  // below) syncs the signed-in user into this store so the rest of the app doesn't need to
+  // touch Clerk's hooks directly.
   const user = useAuthStore((s) => s.user);
   const authLoading = useAuthStore((s) => s.loading);
-  const hydrateAuth = useAuthStore((s) => s.hydrate);
   const signOutAction = useAuthStore((s) => s.signOut);
-  const setUser = useAuthStore((s) => s.setUser);
 
   const [showAuth, setShowAuth] = useState(false);
-
-  useEffect(() => {
-    hydrateAuth();
-  }, []);
 
   // Notifications State
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -104,6 +102,25 @@ export default function App() {
     setToastMessage(message);
     setTimeout(() => setToastMessage(null), 3000);
   };
+
+  // A signed-in visitor landing on the marketing page (fresh load, or just finished signing
+  // in) is more useful on their dashboard than looking at ad copy.
+  useEffect(() => {
+    if (user && currentTab === "landing") setCurrentTab("dashboard");
+  }, [user]);
+
+  // Any API call that comes back 401 (missing/expired session, or the Clerk session was
+  // revoked/expired in a way Clerk's own refresh couldn't recover) surfaces here as one
+  // clear message + re-opened sign-in modal, instead of every call site having to
+  // special-case a raw "API 401: ..." error string itself.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      signOutAction();
+      showToast("Your session has expired - please sign in again.");
+      setShowAuth(true);
+    });
+    return () => setUnauthorizedHandler(null);
+  }, []);
 
   const config = useAppStore((s) => s.config);
   const candidates = useAppStore((s) => s.candidates);
@@ -162,13 +179,30 @@ export default function App() {
     }
   };
 
-  // 1. Load initial data from backend on mount
+  // 1. Load initial data from backend once signed in - these endpoints all require
+  // auth now, so firing them before hydrateAuth() resolves a user (e.g. an anonymous
+  // landing-page visit) would trip the 401 handler and pop the sign-in modal
+  // unprompted on every page load.
+  //
+  // fetch* actions only ever add to whatever's already in the store, they never clear
+  // it - so signing out or switching to a different account must explicitly wipe the
+  // previous account's data here, otherwise it stays on screen looking like a leak.
+  const prevUserIdRef = useRef<string | null>(null);
   useEffect(() => {
+    if (!user) {
+      if (prevUserIdRef.current !== null) useAppStore.getState().resetUserData();
+      prevUserIdRef.current = null;
+      return;
+    }
+    if (prevUserIdRef.current !== user.id) {
+      useAppStore.getState().resetUserData();
+    }
+    prevUserIdRef.current = user.id;
     useAppStore.getState().fetchCandidates();
     useAppStore.getState().fetchAgents();
     fetchNotifications();
     fetchQueue();
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (currentTab !== "landing") {
@@ -503,19 +537,14 @@ Required Skills:
 
   // Chart data - computed from config + live candidate state
   const chartData = useMemo(() => {
-    // Real skill distribution from pipeline results
-    const allSkills = pipelineResults
-      .filter(r => r.parsed_skills)
-      .flatMap(r => r.parsed_skills!.split(",").map(s => s.trim()).filter(s => s.length > 0));
-    const skillCounts: Record<string, number> = {};
-    allSkills.forEach(s => { skillCounts[s] = (skillCounts[s] || 0) + 1; });
-    const sortedSkills = Object.entries(skillCounts).sort((a, b) => b[1] - a[1]).slice(0, 6);
-    const skillMatchData = sortedSkills.length > 0
-      ? sortedSkills.map(([name, count]) => ({
-          name, Count: count,
-          color: config.skillMatchData.find(s => s.name.toLowerCase() === name.toLowerCase())?.color || "#6366f1",
-        }))
-      : [];
+    // Skill distribution from every candidate on file, not just ones that went through
+    // a pipeline run - a CV-parsed skill list is comma-split directly, a LinkedIn lead's
+    // prose snippet is scanned for known tech-stack keywords instead (see skillStats.ts).
+    const skillFreq = countSkillFrequency(candidates.map(c => ({ skills: c.skills })));
+    const skillMatchData = skillFreq.map(({ name, count }, i) => ({
+      name, Count: count,
+      color: SKILL_CHART_COLORS[i % SKILL_CHART_COLORS.length],
+    }));
 
     // Pipeline status doughnut: aggregate live candidate counts + apply config colors
     const candidatesByStatus = candidates.reduce((acc, cand) => {
@@ -533,7 +562,7 @@ Required Skills:
     });
 
     return { skillMatchData, pipelineStatusData };
-  }, [candidates, config, stats.totalCandidates, pipelineResults]);
+  }, [candidates, config, stats.totalCandidates]);
 
   // Dynamically compute leaderboard candidate ranking from the candidates state
   const leaderboardCandidates = useMemo(() => {
@@ -683,8 +712,9 @@ Required Skills:
 
   return (
     <div className="min-h-screen w-full overflow-x-hidden bg-slate-50 text-slate-900 font-sans antialiased flex flex-col">
+      <ClerkAuthBridge />
       {/* Navbar Integration - always rendered, full width */}
-      <Navbar 
+      <Navbar
         currentTab={currentTab} 
         setCurrentTab={setCurrentTab}
         user={user}
@@ -1125,7 +1155,11 @@ Required Skills:
                     onTriggerToast={showToast}
                     onViewDetails={(id) => {
                       const match = candidates.find((c) => c.id === id);
-                      if (match) setDetailCandidate(match);
+                      if (match) {
+                        setDetailCandidate(match);
+                      } else {
+                        showToast("This candidate is still loading - try refreshing the Candidates tab.");
+                      }
                     }}
                     onAdvanceStage={(name) => {
                       const match = candidates.find(c => c.name === name);

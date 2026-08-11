@@ -94,6 +94,7 @@ interface AppState {
   fetchPipelineRuns: () => Promise<void>;
   runPipeline: (data: { job_title?: string; job_description: string; candidate_ids?: string[] }) => Promise<{ run: PipelineRunDTO; results: PipelineResultDTO[] }>;
   getPipelineRun: (id: string) => Promise<{ run: PipelineRunDTO; results: PipelineResultDTO[] }>;
+  resetUserData: () => void;
 }
 
 function toCandidate(dto: CandidateDTO): Candidate {
@@ -427,6 +428,24 @@ export const useAppStore = create<AppState>((set, get) => ({
       console.error("getPipelineRun failed", e);
       throw e;
     }
+  },
+
+  // Every fetch* action only ever appends/replaces on top of whatever's already here -
+  // nothing ever clears it. Without this, signing out (or switching to a different
+  // account) leaves the previous account's candidates/queue/etc. visible until a fresh
+  // fetch happens to succeed, which looks exactly like a data-isolation leak even when
+  // the backend is scoping correctly.
+  resetUserData: () => {
+    set({
+      candidates: [],
+      agents: [],
+      config: initialConfig,
+      notifications: [],
+      queueItems: [],
+      diagnosticResult: null,
+      pipelineRuns: [],
+      pipelineResults: [],
+    });
   },
 }));
 
