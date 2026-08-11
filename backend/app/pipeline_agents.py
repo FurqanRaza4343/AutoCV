@@ -348,7 +348,7 @@ def run_pipeline_stage(cand_dict: dict, cand_id: str, job_description: str) -> d
     return {"candidate_id": cand_id, "candidate": cand_dict, "parsed": parsed, "screened": screened}
 
 
-def run_pipeline_parallel(candidates_map: dict, candidate_ids: list[str], job_description: str, progress_callback=None) -> list[dict]:
+def run_pipeline_parallel(candidates_map: dict, candidate_ids: list[str], job_description: str, progress_callback=None) -> tuple[list[dict], dict | None]:
     working_data = []
     total = len(candidate_ids)
 
@@ -400,4 +400,4 @@ def run_pipeline_parallel(candidates_map: dict, candidate_ids: list[str], job_de
 
     working_data = agent_deep_rank(working_data, job_description)
     working_data, best = agent_finalize(working_data, job_description)
-    return working_data
+    return working_data, best

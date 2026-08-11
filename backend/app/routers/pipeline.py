@@ -59,7 +59,7 @@ def _background_run_pipeline(run_id: str, candidate_ids: list[str], job_title: s
         finally:
             udb.close()
 
-    working_data = run_pipeline_parallel(candidates_map, candidate_ids, job_description, progress_callback=update_progress)
+    working_data, best_wd = run_pipeline_parallel(candidates_map, candidate_ids, job_description, progress_callback=update_progress)
 
     # Fresh session for the write-back phase - the one above is long gone by now.
     db = SessionLocal()
@@ -75,11 +75,12 @@ def _background_run_pipeline(run_id: str, candidate_ids: list[str], job_title: s
         db.query(models.PipelineResult).filter(models.PipelineResult.run_id == run.id).delete()
         db.commit()
 
-        best = None
-        first_id = working_data[0]["candidate_id"] if working_data else None
-        for wd in working_data:
-            if wd.get("candidate_id") and wd["candidate_id"] == first_id:
-                best = wd
+        # best_wd (from agent_finalize via run_pipeline_parallel) is only ever a
+        # candidate that was actually scored (status == "ok") - it's None when every
+        # result in this batch is a lead with no CV or a failed AI call, in which case
+        # nothing should be crowned "Best Match" (a bare `working_data[0]` pick here
+        # previously let an unscored lead show up as the best match with a blank score).
+        best_candidate_id = best_wd.get("candidate_id") if best_wd else None
 
         for idx, wd in enumerate(working_data):
             p = wd.get("parsed", {})
@@ -89,9 +90,16 @@ def _background_run_pipeline(run_id: str, candidate_ids: list[str], job_title: s
             skills_list = p.get("skills", [])
             skills_str = ", ".join(skills_list) if isinstance(skills_list, list) else str(skills_list)
 
-            is_best = False
-            if best and wd["candidate_id"] == best.get("candidate_id"):
-                is_best = True
+            is_best = best_candidate_id is not None and wd["candidate_id"] == best_candidate_id
+
+            # agent_finalize() also computes a concrete "what to do about this" next step
+            # (e.g. "ask for a resume and re-run" for a lead) - there's no dedicated column
+            # for it, so fold it into final_notes rather than silently dropping it; this is
+            # the one field surfaced everywhere a result is shown (UI card + all 3 exports).
+            final_notes_text = f.get("final_notes", "")
+            next_steps = f.get("next_steps", "")
+            if next_steps:
+                final_notes_text = f"{final_notes_text} Next step: {next_steps}".strip()
 
             result = models.PipelineResult(
                 run_id=run.id,
@@ -109,7 +117,7 @@ def _background_run_pipeline(run_id: str, candidate_ids: list[str], job_title: s
                 ranked_analysis=r.get("ranked_analysis", ""),
                 rank_position=r.get("rank_position", idx + 1),
                 final_verdict=f.get("final_verdict", "Consider"),
-                final_notes=f.get("final_notes", ""),
+                final_notes=final_notes_text,
                 is_best_match=is_best,
             )
             db.add(result)
