@@ -4,6 +4,7 @@ import time
 import requests
 from dotenv import load_dotenv
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -13,13 +14,27 @@ from app.routers import auth, candidates, agents, dashboard, diagnostics, notifi
 
 load_dotenv()
 
-Base.metadata.create_all(bind=engine)
+
+def _init_db(max_attempts: int = 5, delay_seconds: int = 3) -> None:
+    # A single transient DB connectivity blip at import time used to crash the whole
+    # process before the FastAPI app object even existed, with no chance to recover.
+    # Retry a few times first - a momentary hiccup shouldn't take the whole server down.
+    for attempt in range(1, max_attempts + 1):
+        try:
+            Base.metadata.create_all(bind=engine)
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE job_descriptions ADD COLUMN IF NOT EXISTS embedding TEXT"))
+                conn.commit()
+            return
+        except OperationalError as e:
+            if attempt == max_attempts:
+                print(f"[startup] Database unreachable after {max_attempts} attempts: {e}")
+                raise
+            print(f"[startup] Database not reachable yet (attempt {attempt}/{max_attempts}), retrying in {delay_seconds}s...")
+            time.sleep(delay_seconds)
 
 
-# Migrate existing tables: add columns if missing
-with engine.connect() as conn:
-    conn.execute(text("ALTER TABLE job_descriptions ADD COLUMN IF NOT EXISTS embedding TEXT"))
-    conn.commit()
+_init_db()
 
 
 app = FastAPI(title="Agentix HR Backend")
