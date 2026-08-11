@@ -1,67 +1,107 @@
 import os
-from datetime import datetime, timedelta, timezone
+import time
 
-import bcrypt
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Header
-from jose import JWTError, jwt
+from jose import jwt
+from jose.exceptions import JOSEError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from .. import models, schemas
+from .. import models
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-SECRET_KEY = os.getenv("JWT_SECRET", "change-me-in-production")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_HOURS = 72
+CLERK_SECRET_KEY = os.getenv("CLERK_SECRET_KEY", "")
+CLERK_FRONTEND_API = os.getenv("CLERK_FRONTEND_API", "flying-midge-48.clerk.accounts.dev")
+CLERK_ISSUER = f"https://{CLERK_FRONTEND_API}"
+CLERK_JWKS_URL = f"{CLERK_ISSUER}/.well-known/jwks.json"
 
-INSFORGE_URL = os.getenv("INSFORGE_URL", "https://6uvfcvui.us-east.insforge.app")
-
-
-def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-
-
-def verify_password(password: str, hashed: str) -> bool:
-    return bcrypt.checkpw(password.encode(), hashed.encode())
+# In-memory JWKS cache: Clerk's signing keys rarely rotate, so fetching them on every
+# request would be wasteful and adds a network hop to every authenticated call.
+_jwks_cache: dict = {"keys_by_kid": {}, "fetched_at": 0.0}
+_JWKS_TTL_SECONDS = 3600
 
 
-def create_token(user_id: str) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
-    return jwt.encode({"sub": user_id, "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
+def _get_jwk(kid: str) -> dict | None:
+    now = time.time()
+    if kid not in _jwks_cache["keys_by_kid"] or (now - _jwks_cache["fetched_at"]) > _JWKS_TTL_SECONDS:
+        resp = requests.get(CLERK_JWKS_URL, timeout=10)
+        resp.raise_for_status()
+        keys = resp.json().get("keys", [])
+        _jwks_cache["keys_by_kid"] = {k["kid"]: k for k in keys}
+        _jwks_cache["fetched_at"] = now
+    return _jwks_cache["keys_by_kid"].get(kid)
 
 
-def verify_insforge_token(token: str) -> dict:
+def verify_clerk_token(token: str) -> dict:
     try:
-        resp = requests.get(
-            f"{INSFORGE_URL}/api/auth/v1/user",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=10,
+        header = jwt.get_unverified_header(token)
+        kid = header.get("kid")
+        jwk = _get_jwk(kid) if kid else None
+        if not jwk:
+            raise HTTPException(401, "Invalid token: unknown signing key")
+        claims = jwt.decode(
+            token,
+            jwk,
+            algorithms=["RS256"],
+            issuer=CLERK_ISSUER,
+            options={"verify_aud": False},
         )
-        if resp.status_code != 200:
-            raise HTTPException(401, "Invalid or expired InsForge token")
-        return resp.json()
-    except requests.RequestException as e:
-        raise HTTPException(502, f"InsForge auth unreachable: {str(e)}")
+        return claims
+    except HTTPException:
+        raise
+    except (JOSEError, requests.RequestException) as e:
+        raise HTTPException(401, f"Invalid or expired token: {str(e)}")
 
 
-def get_or_create_user_from_insforge(insforge_user: dict, db: Session) -> models.User:
-    email = insforge_user.get("email")
-    if not email:
-        raise HTTPException(400, "Email not provided in InsForge token")
+def _fetch_clerk_profile(clerk_user_id: str) -> dict:
+    resp = requests.get(
+        f"https://api.clerk.com/v1/users/{clerk_user_id}",
+        headers={"Authorization": f"Bearer {CLERK_SECRET_KEY}"},
+        timeout=10,
+    )
+    if resp.status_code != 200:
+        raise HTTPException(401, "Could not fetch user profile from Clerk")
+    return resp.json()
 
-    user = db.query(models.User).filter(models.User.email == email).first()
+
+def get_or_create_user_from_clerk(clerk_user_id: str, db: Session) -> models.User:
+    user = db.query(models.User).filter(models.User.clerk_user_id == clerk_user_id).first()
     if user:
         return user
 
-    metadata = insforge_user.get("user_metadata") or {}
+    # Session tokens don't carry email unless a custom Clerk JWT template is configured -
+    # fetch the profile from Clerk's Backend API instead (only happens once, on first sight
+    # of a new Clerk user id).
+    profile = _fetch_clerk_profile(clerk_user_id)
+    emails = profile.get("email_addresses") or []
+    primary_email_id = profile.get("primary_email_address_id")
+    email = next((e["email_address"] for e in emails if e.get("id") == primary_email_id), None)
+    email = email or (emails[0]["email_address"] if emails else None)
+    if not email:
+        raise HTTPException(400, "Email not provided by Clerk")
+
+    name = " ".join(filter(None, [profile.get("first_name"), profile.get("last_name")])) or email.split("@")[0]
+    avatar_url = profile.get("image_url")
+
+    # Link, don't orphan: reuse an existing local account with the same email (e.g. from
+    # earlier auth-provider testing on this project) instead of creating a disconnected
+    # duplicate that starts with none of that account's data.
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if user:
+        user.clerk_user_id = clerk_user_id
+        db.commit()
+        db.refresh(user)
+        return user
+
     user = models.User(
         email=email,
-        password_hash="__INSFORGE_AUTH__",
-        name=metadata.get("name", email.split("@")[0]),
-        role=metadata.get("role", "HR Recruiter"),
-        avatar_url=metadata.get("avatar_url"),
+        password_hash="__CLERK_AUTH__",
+        name=name,
+        role="HR Recruiter",
+        avatar_url=avatar_url,
+        clerk_user_id=clerk_user_id,
     )
     db.add(user)
     db.commit()
@@ -70,106 +110,20 @@ def get_or_create_user_from_insforge(insforge_user: dict, db: Session) -> models
 
 
 def get_current_user(
-    authorization: str = Header(...),
+    authorization: str | None = Header(None),
     db: Session = Depends(get_db),
 ) -> models.User:
+    # Header(None) instead of Header(...): a missing header must fail as a clean,
+    # frontend-catchable 401 "not signed in" - a required Header(...) makes FastAPI's
+    # own validation reject the request with a raw 422 before this function even runs.
+    if not authorization:
+        raise HTTPException(401, "Not authenticated")
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(401, "Invalid authorization header")
 
-    # Try InsForge token first
-    try:
-        insforge_user = verify_insforge_token(token)
-        return get_or_create_user_from_insforge(insforge_user, db)
-    except HTTPException:
-        pass
-
-    # Fall back to legacy JWT
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
-        if not user_id:
-            raise HTTPException(401, "Invalid token payload")
-    except JWTError:
-        raise HTTPException(401, "Invalid or expired token")
-
-    user = db.query(models.User).filter(models.User.id == user_id).first()
-    if not user:
-        raise HTTPException(401, "User not found")
-    return user
-
-
-@router.post("/register", response_model=schemas.AuthOut)
-def register(payload: schemas.RegisterRequest, db: Session = Depends(get_db)):
-    if db.query(models.User).filter(models.User.email == payload.email).first():
-        raise HTTPException(400, "Email already registered")
-    user = models.User(
-        email=payload.email,
-        password_hash=hash_password(payload.password),
-        name=payload.name,
-        role=payload.role,
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return schemas.AuthOut(token=create_token(user.id), user=user)
-
-
-@router.post("/login", response_model=schemas.AuthOut)
-def login(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.email == payload.email).first()
-    if not user or not verify_password(payload.password, user.password_hash):
-        raise HTTPException(401, "Invalid email or password")
-    return schemas.AuthOut(token=create_token(user.id), user=user)
-
-
-@router.get("/me", response_model=schemas.UserOut)
-def me(current_user: models.User = Depends(get_current_user)):
-    return current_user
-
-
-@router.post("/google", response_model=schemas.AuthOut)
-def google_auth(payload: schemas.GoogleAuthRequest, db: Session = Depends(get_db)):
-    from google.oauth2 import id_token as google_id_token
-    from google.auth.transport import requests as google_requests
-
-    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-    if not GOOGLE_CLIENT_ID:
-        raise HTTPException(500, "GOOGLE_CLIENT_ID not configured")
-
-    try:
-        request = google_requests.Request()
-        google_payload = google_id_token.verify_oauth2_token(
-            payload.credential, request, GOOGLE_CLIENT_ID
-        )
-    except Exception as e:
-        raise HTTPException(401, f"Google token verification failed: {str(e)}")
-
-    email = google_payload["email"]
-    name = google_payload.get("name", email.split("@")[0])
-    avatar_url = google_payload.get("picture")
-
-    user = db.query(models.User).filter(models.User.email == email).first()
-    if user:
-        if avatar_url and not user.avatar_url:
-            user.avatar_url = avatar_url
-            db.commit()
-            db.refresh(user)
-    else:
-        user = models.User(
-            email=email,
-            password_hash="__GOOGLE_AUTH__",
-            name=name,
-            role="HR Recruiter",
-            avatar_url=avatar_url,
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-    return schemas.AuthOut(token=create_token(user.id), user=user)
-
-
-@router.post("/logout")
-def logout():
-    return {"ok": True}
+    claims = verify_clerk_token(token)
+    clerk_user_id = claims.get("sub")
+    if not clerk_user_id:
+        raise HTTPException(401, "Invalid token payload")
+    return get_or_create_user_from_clerk(clerk_user_id, db)
