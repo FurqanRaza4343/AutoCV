@@ -269,18 +269,23 @@ export default function AgentAnalytics({ mode = "agents", bots, onToggleBot, onR
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" id="dashboard-advanced-visualizers">
         
         {/* Visualizer 1: Skill Match Distribution (Bar Chart) */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col justify-between">
-          <div>
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between overflow-hidden">
+          <div className="p-6 pb-0">
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-bold text-slate-900">Skill Match Distribution</h3>
-              <span className="text-[10px] font-semibold text-slate-400 bg-slate-100 px-2 py-0.5 rounded">Current Batch</span>
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-sm">
+                  <TrendingUp className="h-4 w-4" />
+                </div>
+                <h3 className="text-sm font-bold text-slate-900">Skill Match Distribution</h3>
+              </div>
+              <span className="text-[10px] font-semibold text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-full">Current Batch</span>
             </div>
             <p className="text-xs text-slate-500 mb-6">
-              Percentage frequency of major tech-stacks matched within incoming candidate pools.
+              How often each tech-stack skill appears across the candidates on file right now.
             </p>
           </div>
 
-          <div className="h-72 w-full flex items-center justify-center">
+          <div className="h-72 w-full flex items-center justify-center px-6 pb-6">
             {skillMatchData.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
@@ -319,10 +324,12 @@ export default function AgentAnalytics({ mode = "agents", bots, onToggleBot, onR
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <div className="flex flex-col items-center justify-center text-slate-400">
-                <Activity className="h-8 w-8 mb-2 text-slate-300" />
-                <p className="text-xs font-semibold">No Data Yet</p>
-                <p className="text-[10px] mt-0.5">Run the AI pipeline to see skill distribution</p>
+              <div className="flex flex-col items-center justify-center text-center rounded-xl bg-gradient-to-br from-indigo-50 to-violet-50 border border-indigo-100 w-full h-full">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm mb-2">
+                  <Activity className="h-5 w-5 text-indigo-500" />
+                </div>
+                <p className="text-xs font-semibold text-slate-700">No Skill Data Yet</p>
+                <p className="text-[10px] mt-0.5 text-slate-500">Add candidates (upload a CV or fetch leads) to see tech-stack trends</p>
               </div>
             )}
           </div>
