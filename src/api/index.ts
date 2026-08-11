@@ -2,34 +2,60 @@ const API_BASE =
   import.meta.env.VITE_API_URL ||
   (import.meta.env.DEV ? "" : "https://agentix-hr-api-bdf4c6a4-c75e-4067-87b5-e0d3b29e3c91.fly.dev");
 
-let _accessToken: string | null = null;
-
-export function setAccessToken(token: string | null) {
-  _accessToken = token;
+// Clerk's useAuth().getToken() always returns a valid, transparently-refreshed session
+// token (or null if signed out) - it can only be called from inside a React component, so
+// a single bridge component registers it here once, letting this plain module call it
+// fresh before every request instead of hand-rolling a token cache/refresh dance.
+let _getToken: (() => Promise<string | null>) | null = null;
+export function setTokenGetter(fn: (() => Promise<string | null>) | null) {
+  _getToken = fn;
 }
 
-function getToken(): string | null {
-  return _accessToken || localStorage.getItem("auth_token");
+// For the few call sites that can't go through request()/uploadWithAuthRetry() (e.g. a
+// plain <a>/fetch download link that needs the header set up manually).
+export async function getAuthToken(): Promise<string | null> {
+  return _getToken ? await _getToken() : null;
 }
 
-function setToken(token: string | null) {
-  _accessToken = token;
-  if (token) localStorage.setItem("auth_token", token);
-  else localStorage.removeItem("auth_token");
+// The app registers a handler (showing a toast + re-opening the sign-in modal) so a
+// missing/expired session surfaces as one clear message everywhere, instead of every
+// call site having to special-case a raw "API 401: ..." string itself.
+let _onUnauthorized: (() => void) | null = null;
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  _onUnauthorized = handler;
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {};
-  const token = getToken();
+  const token = _getToken ? await _getToken() : null;
   if (token) headers["Authorization"] = `Bearer ${token}`;
   if (options?.body && typeof options.body === "string") {
     headers["Content-Type"] = "application/json";
   }
   const res = await fetch(`${API_BASE}${path}`, { headers, ...options });
   if (!res.ok) {
+    if (res.status === 401) {
+      _onUnauthorized?.();
+      throw new Error("Your session has expired - please sign in again.");
+    }
     const text = await res.text();
-    if (res.status === 401) setToken(null);
     throw new Error(`API ${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
+async function uploadWithAuthRetry<T>(path: string, form: FormData, errorPrefix: string): Promise<T> {
+  const token = _getToken ? await _getToken() : null;
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${API_BASE}${path}`, { method: "POST", body: form, headers });
+  if (!res.ok) {
+    if (res.status === 401) {
+      _onUnauthorized?.();
+      throw new Error("Your session has expired - please sign in again.");
+    }
+    const text = await res.text();
+    throw new Error(`${errorPrefix} API ${res.status}: ${text}`);
   }
   return res.json();
 }
@@ -68,14 +94,6 @@ export interface AgentDTO {
   auto_screen: boolean;
 }
 
-interface UserDTO {
-  id: string;
-  email: string;
-  name: string;
-  role: string;
-  avatar_url: string | null;
-}
-
 export interface NotificationDTO {
   id: string;
   message: string;
@@ -103,31 +121,6 @@ export interface DiagnosticResult {
 }
 
 export const api = {
-  auth: {
-    register: (data: { email: string; password: string; name: string; role?: string }) =>
-      request<{ token: string; user: UserDTO }>("/api/auth/register", {
-        method: "POST",
-        body: JSON.stringify(data),
-      }),
-    login: (data: { email: string; password: string }) =>
-      request<{ token: string; user: UserDTO }>("/api/auth/login", {
-        method: "POST",
-        body: JSON.stringify(data),
-      }),
-    google: (credential: string) =>
-      request<{ token: string; user: UserDTO }>("/api/auth/google", {
-        method: "POST",
-        body: JSON.stringify({ credential }),
-      }),
-    me: () => request<UserDTO>("/api/auth/me"),
-    logout: () => {
-      setToken(null);
-      return Promise.resolve({ ok: true });
-    },
-    getToken,
-    setToken,
-  },
-
   candidates: {
     list: () => request<CandidateDTO[]>("/api/candidates"),
     create: (data: {
@@ -166,19 +159,7 @@ export const api = {
       const form = new FormData();
       form.append("file", file);
       form.append("job_description", jobDescription);
-      const token = getToken();
-      const headers: Record<string, string> = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch(`${API_BASE}/api/candidates/upload`, {
-        method: "POST",
-        body: form,
-        headers,
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Upload API ${res.status}: ${text}`);
-      }
-      return res.json() as Promise<CandidateDTO>;
+      return uploadWithAuthRetry<CandidateDTO>("/api/candidates/upload", form, "Upload");
     },
     screen: (id: string, jobDescription: string) =>
       request<CandidateDTO>(`/api/candidates/${id}/screen`, {
@@ -189,19 +170,11 @@ export const api = {
       const form = new FormData();
       files.forEach((f) => form.append("files", f));
       if (jobDescription) form.append("job_description", jobDescription);
-      const token = getToken();
-      const headers: Record<string, string> = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch(`${API_BASE}/api/candidates/batch-analyze`, {
-        method: "POST",
-        body: form,
-        headers,
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Batch analyze API ${res.status}: ${text}`);
-      }
-      return res.json() as Promise<{ candidates: CVAnalysisDTO[]; total_processed: number }>;
+      return uploadWithAuthRetry<{ candidates: CVAnalysisDTO[]; total_processed: number }>(
+        "/api/candidates/batch-analyze",
+        form,
+        "Batch analyze"
+      );
     },
   },
 

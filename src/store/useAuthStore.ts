@@ -1,6 +1,4 @@
 import { create } from "zustand";
-import { insforge } from "../lib/insforge";
-import { setAccessToken } from "../api";
 
 export interface AuthUser {
   id: string;
@@ -13,72 +11,19 @@ export interface AuthUser {
 interface AuthState {
   user: AuthUser | null;
   loading: boolean;
-  accessToken: string | null;
-  hydrate: () => Promise<void>;
-  setUser: (user: AuthUser | null, accessToken?: string | null) => void;
+  setUser: (user: AuthUser | null) => void;
+  setLoading: (loading: boolean) => void;
+  // Clerk's signOut() is only reachable via a hook, so ClerkAuthBridge registers the real
+  // implementation here once mounted; everything else in the app just calls signOut().
+  registerSignOut: (fn: () => Promise<void>) => void;
   signOut: () => Promise<void>;
 }
 
-function syncAccessToken() {
-  try {
-    const token = (insforge.auth as any).tokenManager.getAccessToken();
-    if (token) {
-      setAccessToken(token);
-      return token;
-    }
-  } catch {
-  }
-  return null;
-}
-
-export const useAuthStore = create<AuthState>((set) => {
-  insforge.auth.onAuthStateChange(() => {
-    syncAccessToken();
-  });
-
-  return {
-    user: null,
-    loading: true,
-    accessToken: null,
-
-    hydrate: async () => {
-      try {
-        const { data, error } = await insforge.auth.getCurrentUser();
-        if (error || !data?.user) {
-          set({ user: null, loading: false, accessToken: null });
-          setAccessToken(null);
-          return;
-        }
-
-        const u = data.user;
-        const profile = (u as any).profile || {};
-        const token = syncAccessToken();
-        set({
-          user: {
-            id: u.id,
-            email: u.email ?? "",
-            name: profile.name || u.email?.split("@")[0] || "User",
-            role: profile.role || "HR Recruiter",
-            avatarUrl: profile.avatar_url || "",
-          },
-          accessToken: token,
-          loading: false,
-        });
-      } catch {
-        set({ user: null, loading: false, accessToken: null });
-        setAccessToken(null);
-      }
-    },
-
-    setUser: (user, accessToken) => {
-      if (accessToken) setAccessToken(accessToken);
-      set({ user, accessToken: accessToken ?? null });
-    },
-
-    signOut: async () => {
-      await insforge.auth.signOut();
-      setAccessToken(null);
-      set({ user: null, accessToken: null });
-    },
-  };
-});
+export const useAuthStore = create<AuthState>((set) => ({
+  user: null,
+  loading: true,
+  setUser: (user) => set({ user }),
+  setLoading: (loading) => set({ loading }),
+  registerSignOut: (fn) => set({ signOut: fn }),
+  signOut: async () => {},
+}));
