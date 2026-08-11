@@ -17,6 +17,7 @@ class User(Base):
     name = Column(String, nullable=False)
     role = Column(String, default="HR Recruiter")
     avatar_url = Column(String, nullable=True)
+    clerk_user_id = Column(String, unique=True, nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
