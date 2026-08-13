@@ -51,15 +51,19 @@ def clean_name(raw: str) -> str:
     if not raw:
         return "Unknown"
     name = raw.strip()
-    cleaned = re.sub(r'[^A-Za-z \-.\']', '', name).strip()
-    if len(cleaned) < 2:
-        words = re.findall(r'[A-Za-z]+', name)
-        return words[0].capitalize() if words else "Unknown"
-    cleaned = re.sub(r'\s+', ' ', cleaned)
-    if cleaned.count(' ') > 3:
-        parts = cleaned.split()
-        cleaned = ' '.join(parts[:3])
-    return cleaned.strip()[:100] or "Unknown"
+    # Remove any character that is not a letter, space, hyphen, period, or apostrophe
+    cleaned = re.sub(r'[^A-Za-z \\-.\']', '', name).strip()
+    # Extract alphabetic words from the cleaned name
+    words = re.findall(r'[A-Za-z]+', cleaned)
+    if words:
+        # Return the first alphabetic word capitalized, as long as it's at least 2 chars
+        capitalized = words[0].capitalize()
+        return capitalized if len(capitalized) >= 2 else "Unknown"
+    # If no alphabetic words found, check if the cleaned string itself is at least 2 chars
+    # and contains only allowed characters
+    if len(cleaned) >= 2:
+        return cleaned[:3].capitalize()
+    return "Unknown"
 
 
 def has_real_cv(cv_text: str | None) -> bool:
