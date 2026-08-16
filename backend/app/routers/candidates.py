@@ -75,7 +75,20 @@ def has_real_cv(cv_text: str | None) -> bool:
     """A lead sourced from LinkedIn/SERP has no resume - its cv_text is a JSON
     dump of the search snippet (see normalize_serp_to_candidate), not prose.
     Only prose should ever be run through the full CV-scoring prompt."""
-    return bool(cv_text) and not cv_text.strip().startswith("{")
+    if not cv_text:
+        return False
+    text = cv_text.strip()
+    # Reject JSON/dict-like structures returned from SERP normalization
+    if text.startswith("{") or text.startswith("["):
+        return False
+    # Very short text is unlikely to be real CV prose
+    if len(text) < 15:
+        return False
+    # Check for sentence-like structure (contains periods indicating prose)
+    if "." in text and len(text.split(".")) > 1:
+        return True
+    # Last resort: check for alphabetic characters
+    return bool(re.match(r"[A-Za-z]", text))
 
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
