@@ -2,6 +2,7 @@ import json
 import os
 import io
 import csv
+import re
 import threading
 from datetime import datetime, timezone
 
@@ -153,7 +154,10 @@ def _background_run_pipeline(run_id: str, candidate_ids: list[str], job_title: s
 @router.post("/run")
 def run_pipeline(payload: schemas.PipelineRunCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     job_title = payload.job_title or "Software Engineer"
-    job_description = payload.job_description or ""
+    # Sanitize job_description: limit length and strip potentially dangerous HTML
+    job_description = (payload.job_description or "").strip()[:5000]
+    job_description = re.sub(r'<script[^>]*>.*?</script>', '', job_description, flags=re.IGNORECASE | re.DOTALL)
+    job_description = re.sub(r'<[^>]+>', '', job_description)
     candidate_ids = payload.candidate_ids
 
     if not candidate_ids:
