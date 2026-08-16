@@ -53,16 +53,21 @@ def clean_name(raw: str) -> str:
     name = raw.strip()
     # Remove any character that is not a letter, space, hyphen, period, or apostrophe
     cleaned = re.sub(r'[^A-Za-z \\-.\']', '', name).strip()
-    # Extract alphabetic words from the cleaned name
-    words = re.findall(r'[A-Za-z]+', cleaned)
+    # Extract alphabetic words - numbers at the start should not become the name
+    words = re.findall(r'[A-Za-z]+', name)
     if words:
-        # Return the first alphabetic word capitalized, as long as it's at least 2 chars
-        capitalized = words[0].capitalize()
-        return capitalized if len(capitalized) >= 2 else "Unknown"
-    # If no alphabetic words found, check if the cleaned string itself is at least 2 chars
-    # and contains only allowed characters
-    if len(cleaned) >= 2:
+        # Return the first alphabetic word capitalized if at least 2 chars
+        first = words[0]
+        if len(first) >= 2:
+            return first.capitalize()
+        # If first word is 1 char, check if there's a second word
+        if len(words) >= 2 and len(words[1]) >= 2:
+            return words[1].capitalize()
+    # If no good alphabetic word, fall back to cleaned string prefix
+    if len(cleaned) >= 3:
         return cleaned[:3].capitalize()
+    if len(cleaned) >= 2:
+        return cleaned[:2].capitalize()
     return "Unknown"
 
 
