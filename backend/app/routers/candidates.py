@@ -590,6 +590,12 @@ def list_candidates(db: Session = Depends(get_db), current_user: models.User = D
 
 @router.post("", response_model=schemas.CandidateOut)
 def create_candidate(payload: schemas.CandidateCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    # Validate name is not just numbers/special chars
+    name = payload.name.strip()
+    if not re.match(r"[A-Za-z]", name):
+        raise HTTPException(400, "Invalid candidate name - must contain alphabetic characters")
+    if len(name) > 100:
+        raise HTTPException(400, "Name too long - maximum 100 characters")
     candidate = models.Candidate(**payload.model_dump(), user_id=current_user.id)
     db.add(candidate)
     db.commit()
