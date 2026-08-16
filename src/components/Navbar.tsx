@@ -1,7 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Terminal, User, ChevronDown, LogOut, Settings, Bell, Briefcase, Menu, X } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { NAV_ITEMS } from "../navConfig";
+
+const DEBOUNCE_DELAY = 300;
 
 // Custom SPA-compatible link wrapper
 const Link = ({ href, onClick, children, className, id, title }: {
@@ -42,10 +44,16 @@ interface NavbarProps {
 export default function Navbar({ currentTab, setCurrentTab, user, onSignIn, onSignOut, onMenuToggle, notifications = [], onMarkRead }: NavbarProps) {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [currentFilter, setCurrentFilter] = useState("");
 
   // "Home" is the marketing landing page, not part of the in-app flow, so it's kept
   // separate from the shared NAV_ITEMS list that drives both this navbar and the sidebar.
   const navItems = [{ id: "landing", label: "Home" }, ...NAV_ITEMS.map(({ id, label }) => ({ id, label }))];
+
+  // Clean up debounce timeout on unmount
+  useEffect(() => {
+    return () => setCurrentFilter("");
+  }, []);
 
   return (
     <>
@@ -85,8 +93,24 @@ export default function Navbar({ currentTab, setCurrentTab, user, onSignIn, onSi
 
           {/* Center: Desktop Navigation */}
           <nav className="hidden md:flex justify-center items-center gap-2 sm:gap-6">
-            {navItems.map((item) => {
-              const isActive = currentTab === item.id;
+            {/* Search/filter input with debounce */}
+          <div className="relative w-full max-w-xs">
+            <input
+              type="text"
+              placeholder="Filter candidates..."
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
+              onChange={(e) => {
+                const timeout = setTimeout(() => setCurrentFilter(e.target.value), DEBOUNCE_DELAY);
+                return () => clearTimeout(timeout);
+              }}
+            />
+            <svg className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path className="pointer-events-none" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
+
+          {navItems.map((item) => {
+              const isActive = currentTab === item.id || (currentFilter && item.label.toLowerCase().includes(currentFilter.toLowerCase()));
               return (
                 <button
                   key={item.id}
