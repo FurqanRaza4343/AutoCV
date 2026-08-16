@@ -27,6 +27,7 @@ const clerkAppearance = {
 export default function AuthModal({ onClose }: AuthModalProps) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const user = useAuthStore((s) => s.user);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Clerk updates useAuthStore's user (via ClerkAuthBridge) the moment sign-in/sign-up
   // actually succeeds - close automatically instead of requiring a manual step.
@@ -61,9 +62,19 @@ export default function AuthModal({ onClose }: AuthModalProps) {
         </div>
 
         {mode === "login" ? (
-          <SignIn routing="virtual" appearance={clerkAppearance} />
+          <SignIn
+            routing="virtual"
+            appearance={clerkAppearance}
+            disabled={isSubmitting}
+            className="w-full"
+          />
         ) : (
-          <SignUp routing="virtual" appearance={clerkAppearance} />
+          <SignUp
+            routing="virtual"
+            appearance={clerkAppearance}
+            disabled={isSubmitting}
+            className="w-full"
+          />
         )}
 
         <div className="mt-4 text-center text-xs text-slate-500">
